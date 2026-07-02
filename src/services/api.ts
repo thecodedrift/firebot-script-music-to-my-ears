@@ -41,6 +41,28 @@ interface FetchResult<T> {
   data: T | undefined;
 }
 
+/** Query-param values that can carry user content and must not reach the logs. */
+const REDACTED_PARAMS = new Set(["q", "uri", "uris"]);
+
+/**
+ * Redacts user-content query values (search text, track uris) from an endpoint
+ * so the failure-triage block is safe to paste into an issue. The path and
+ * structural params (e.g. `type`, `limit`) are kept intact for context.
+ */
+export function redactEndpoint(endpoint: string): string {
+  const [path, query] = endpoint.split("?");
+  if (!query) {
+    return endpoint;
+  }
+  const params = new URLSearchParams(query);
+  for (const key of Array.from(params.keys())) {
+    if (REDACTED_PARAMS.has(key)) {
+      params.set(key, "REDACTED");
+    }
+  }
+  return `${path}?${params.toString()}`;
+}
+
 /**
  * Single Spotify API helper: injects the base URL + bearer token and throws a
  * typed {@link SpotifyApiError} on non-OK responses. Non-GET and 204 responses
@@ -93,7 +115,7 @@ export async function spotifyFetch<T>(
     // response, and the derived error are recorded.
     logger.debug(
       `Spotify request failed: ${JSON.stringify({
-        request: { method, endpoint },
+        request: { method, endpoint: redactEndpoint(endpoint) },
         response: {
           status: response.status,
           statusText: response.statusText,

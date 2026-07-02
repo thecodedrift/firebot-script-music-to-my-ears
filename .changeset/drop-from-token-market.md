@@ -14,4 +14,5 @@ playable track, so the previously silent "not found" path is diagnosable.
 Adds a triage debug block on every failed Spotify response capturing the
 request shape, the response (status, status text, retry-after / request-id,
 body), and the derived error. It deliberately omits the Authorization header,
-access token, and client secret.
+access token, and client secret, and redacts user-content query values (search
+text, track uris) from the logged endpoint.
