@@ -74,15 +74,36 @@ export async function spotifyFetch<T>(
   if (!response.ok) {
     let reason: string | undefined;
     let message = `Spotify API returned status ${response.status}`;
+    // Read the body as text first so a non-JSON error page is still captured
+    // for triage; parse it as Spotify's error shape when it is JSON.
+    const rawBody = await response.text().catch(() => "");
+    let body: unknown = rawBody || undefined;
     try {
-      const body = (await response.json()) as SpotifyErrorResponse;
-      reason = body.error?.reason;
-      if (body.error?.message) {
-        message = body.error.message;
+      const parsed = JSON.parse(rawBody) as SpotifyErrorResponse;
+      body = parsed;
+      reason = parsed.error?.reason;
+      if (parsed.error?.message) {
+        message = parsed.error.message;
       }
     } catch {
-      // non-JSON error body; keep default message
+      // non-JSON error body; keep the raw text and the default message
     }
+    // Triage block for us. Deliberately excludes the Authorization header, the
+    // access token, and the client secret — only the request shape, the
+    // response, and the derived error are recorded.
+    logger.debug(
+      `Spotify request failed: ${JSON.stringify({
+        request: { method, endpoint },
+        response: {
+          status: response.status,
+          statusText: response.statusText,
+          retryAfter: response.headers.get("retry-after") ?? undefined,
+          requestId: response.headers.get("x-request-id") ?? undefined,
+          body,
+        },
+        error: { status: response.status, message, reason },
+      })}`
+    );
     throw new SpotifyApiError(response.status, message, reason);
   }
 
