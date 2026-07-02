@@ -125,11 +125,13 @@ function toTrack(item: SpotifyTrack): Track {
 }
 
 /**
- * Use the market tied to the access token so responses carry per-account
- * `is_playable` (instead of the giant `available_markets` array) and search
- * is filtered to what the linked account can actually play.
+ * We intentionally send no `market` parameter. Spotify deprecated the
+ * `market=from_token` value (Nov 2024) and now rejects it with a 400 on some
+ * endpoints/accounts. Per the current docs, when a valid user access token is
+ * present the account's own country takes priority automatically, so omitting
+ * `market` gives the correct per-account catalog (and `is_playable`) without the
+ * deprecated value. See https://developer.spotify.com/documentation/web-api/reference/search
  */
-const MARKET = "from_token";
 
 /**
  * How many search results to fetch. Spotify's relevance ranking is unreliable
@@ -164,10 +166,9 @@ export function parseTrackId(input: string): string | undefined {
  * (treated as "not found") rather than propagating as a playback-device error.
  */
 export async function getTrack(id: string): Promise<Track | undefined> {
-  const params = new URLSearchParams({ market: MARKET });
   let data: SpotifyTrack | undefined;
   try {
-    ({ data } = await spotifyFetch<SpotifyTrack>(`/tracks/${id}?${params.toString()}`));
+    ({ data } = await spotifyFetch<SpotifyTrack>(`/tracks/${id}`));
   } catch (error) {
     if (error instanceof SpotifyApiError && (error.status === 404 || error.status === 400)) {
       return undefined;
@@ -198,12 +199,21 @@ export async function searchTrack(query: string): Promise<Track | undefined> {
     q: query,
     type: "track",
     limit: String(SEARCH_LIMIT),
-    market: MARKET,
   });
   const { data } = await spotifyFetch<SpotifySearchResponse>(`/search?${params.toString()}`);
   const items = data?.tracks?.items ?? [];
   const playable = items.find((item) => item.is_playable !== false);
-  return playable ? toTrack(playable) : undefined;
+  if (!playable) {
+    // The effect turns `undefined` into a silent "not-found"; log here so a
+    // name search that resolves to nothing is diagnosable (empty result set vs.
+    // results that were all filtered out as unplayable in the account's market).
+    logger.debug(
+      `Spotify search for ${JSON.stringify(query)} returned ${items.length} track(s), ` +
+        "none playable"
+    );
+    return undefined;
+  }
+  return toTrack(playable);
 }
 
 /** Adds a track URI to the active device's playback queue. */
