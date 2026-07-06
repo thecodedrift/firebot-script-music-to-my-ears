@@ -49,7 +49,10 @@ export function makePlaybackEffect(opts: {
         return { success: true, outputs: { success: true, errorReason: "" } };
       } catch (error) {
         logger.warn(`${opts.name} failed: ${String(error)}`);
-        return { success: false, outputs: { success: false, errorReason: toErrorReason(error) } };
+        // Top-level `success` stays `true` so Firebot keeps `outputs`; it discards
+        // them on `success: false`, which would blank the failure's `errorReason`.
+        // The real pass/fail the streamer branches on is `outputs.success`.
+        return { success: true, outputs: { success: false, errorReason: toErrorReason(error) } };
       }
     },
   };

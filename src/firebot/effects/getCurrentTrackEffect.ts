@@ -69,8 +69,11 @@ export const getCurrentTrackEffect: Effects.EffectType<Model, unknown, Outputs> 
       };
     } catch (error) {
       logger.warn(`Get Current Track failed: ${String(error)}`);
+      // Top-level `success` stays `true` so Firebot keeps `outputs`; it discards
+      // them on `success: false`, which would blank the failure's `errorReason`.
+      // The real pass/fail the streamer branches on is `outputs.success`.
       return {
-        success: false,
+        success: true,
         outputs: {
           isPlaying: false,
           trackName: "",

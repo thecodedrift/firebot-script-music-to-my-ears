@@ -23,8 +23,12 @@ interface Outputs {
 }
 
 function failure(reason: ErrorReason, track?: Track): { success: boolean; outputs: Outputs } {
+  // Top-level `success` must stay `true`: Firebot's effect-runner only registers
+  // `outputs` when the effect reports success (it discards them on `success: false`),
+  // which would blank out `errorReason` for downstream effects. The pass/fail the
+  // streamer branches on lives in `outputs.success`, not here.
   return {
-    success: false,
+    success: true,
     outputs: {
       success: false,
       trackUri: "",
