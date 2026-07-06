@@ -10,6 +10,18 @@
       "Bash(pnpm lint:*)",
       "Bash(pnpm build)",
       "Bash(pnpm build:*)"
+    ],
+    "deny": [
+      "Bash(pnpm changeset version)",
+      "Bash(pnpm changeset version:*)",
+      "Bash(pnpm changeset:version)",
+      "Bash(pnpm changeset:version:*)",
+      "Bash(pnpm run changeset:version)",
+      "Bash(pnpm run changeset:version:*)",
+      "Bash(npx changeset version)",
+      "Bash(npx changeset version:*)",
+      "Bash(changeset version)",
+      "Bash(changeset version:*)"
     ]
   }
 }
