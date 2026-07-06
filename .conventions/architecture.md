@@ -171,6 +171,19 @@ deep modules `import { logger, effectManager } from "../modules"`.
 `outputs`) + an AngularJS `optionsTemplate` string (+ optional `optionsController`,
 `optionsValidator`) + `onTriggerEvent({ effect, trigger, sendDataToOverlay, abortSignal })`.
 
+> **Return-value gotcha — the top-level `success` gates outputs.** `onTriggerEvent`
+> returns `{ success, outputs }`. Firebot's effect-runner
+> (`src/backend/common/effect-runner.js`) **only registers `outputs` when the
+> top-level `success` is truthy** — on `success: false` it logs the effect as
+> failed and discards `outputs` entirely, so every output (including any
+> `errorReason`) reaches downstream effects as empty. Therefore the top-level
+> `success` means "did the effect *run to completion*?", **not** "did the request
+> succeed?". An effect that evaluates a request and reports a failure reason ran
+> fine — return top-level `success: true` and encode the real pass/fail in an
+> **`outputs.success`** field (what the streamer branches on via
+> `$effectOutput[success]`). Only return top-level `success: false` when the effect
+> genuinely could not execute and has no outputs worth surfacing.
+
 ### Events — `EventSource`
 A plain object `{ id, name, events: [{ id, name, description, cached? }, ...] }`. Fire with
 `eventManager.triggerEvent(sourceId, eventId, meta)`. For music: `track-changed`,
