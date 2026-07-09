@@ -270,15 +270,30 @@ export function tokenize(text: string): Set<string> {
   return new Set(cleaned.split(/\s+/).filter(Boolean));
 }
 
-/** Splits `<title> <sep> <artist>` when exactly one separator is present. */
+/**
+ * Splits `<title> <sep> <artist>` when exactly one separator is present.
+ *
+ * A single `by` wins outright, even when the query also contains ` - `. That is
+ * deliberate: Spotify's own titles use ` - ` for version suffixes, so in
+ * `Toxic - Radio Edit by Britney Spears` the dash belongs to the title and only
+ * the `by` separates artist from track. Preferring the dash there would split in
+ * the wrong place.
+ *
+ * The reverse shape (`Stand By Me - Ben E. King`, where `by` sits inside the
+ * title) does mis-split — into `track:"Stand" artist:"Me - Ben E. King"` — but
+ * the leftover `me` token fails validation and the raw fallback recovers it. So
+ * `by`-precedence is never less correct than refusing to split, only one request
+ * more expensive when it guesses wrong.
+ *
+ * Two or more `by`s is the genuinely undecidable case: we cannot tell which one
+ * is the delimiter, so we don't guess, and we don't fall through to the dash.
+ */
 function splitOnSeparator(query: string): { title: string; artist: string } | undefined {
   const byMatches = query.match(BY_SEPARATOR_RE);
   if (byMatches?.length === 1) {
     const at = query.search(BY_SEPARATOR_RE);
     return { title: query.slice(0, at), artist: query.slice(at + byMatches[0].length) };
   }
-  // Only fall through to the dash when `by` was absent entirely. Two `by`s (or a
-  // `by` plus a dash) means we cannot tell which token is the delimiter.
   if (byMatches) {
     return undefined;
   }
@@ -480,12 +495,15 @@ export async function searchTrack(
   const attempt = await runSearch(query);
   logAttempt("raw", query, attempt, undefined, options);
   if (!attempt.selected) {
-    // The effect turns `undefined` into a silent "not-found"; log here so a
-    // name search that resolves to nothing is diagnosable (empty result set vs.
-    // results that were all filtered out as unplayable in the account's market).
+    // Nothing was selected. Today that means the result set was empty: the
+    // `is_playable` predicate in `runSearch` cannot reject anything without a
+    // `market` param (see SEARCH_LIMIT). The count is logged anyway so that if we
+    // ever do send `market`, a non-zero count here reads as "all unplayable".
+    // The effect turns `undefined` into a silent "not-found", so this is the only
+    // place a search that resolved to nothing becomes diagnosable.
     logger.debug(
       `Spotify search for ${JSON.stringify(query)} returned ${attempt.items.length} track(s), ` +
-        "none playable"
+        "none selected"
     );
     return undefined;
   }
