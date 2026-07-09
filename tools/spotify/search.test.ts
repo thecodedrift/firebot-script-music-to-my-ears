@@ -136,6 +136,24 @@ live("spotify search (reported bugs)", () => {
     expect(track).not.toBeNull();
     expect(track!.name).toMatch(/stand by me/i);
   });
+
+  // Mixed separators: `by` wins. Spotify titles use ` - ` for version suffixes,
+  // so the dash here belongs to the title, not to the artist boundary.
+  it("prefers `by` over a hyphen that belongs to the track title", async () => {
+    const track = await searchTrack("Toxic - Radio Edit by Britney Spears");
+    expect(track).not.toBeNull();
+    expect(track!.name).toMatch(/toxic/i);
+    expect(track!.artist).toMatch(/britney spears/i);
+  });
+
+  // The reverse shape mis-splits into track:"Stand" artist:"Me - Ben E. King".
+  // Validation rejects it and the raw fallback recovers the real track.
+  it("recovers when `by` sits inside the title and the dash is the real separator", async () => {
+    const track = await searchTrack("Stand By Me - Ben E. King");
+    expect(track).not.toBeNull();
+    expect(track!.name).toMatch(/stand by me/i);
+    expect(track!.artist).toMatch(/ben e\.? king/i);
+  });
 });
 
 /**

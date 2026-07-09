@@ -106,6 +106,18 @@ double-quote character within a filter value SHALL be stripped before quoting. A
 contains a recognized Spotify field filter (`track:`, `artist:`, `album:`, `year:`, `genre:`,
 `isrc:`, `upc:`, `tag:`) SHALL be passed through unmodified.
 
+The two separators SHALL NOT be weighed equally. A single `by` SHALL take precedence over a spaced
+hyphen when both appear, because Spotify's own track titles use ` - ` to introduce version suffixes
+(`Toxic - Radio Edit`), so in a mixed query the hyphen usually belongs to the title. The spaced
+hyphen SHALL be considered only when the query contains no `by` at all. Two or more `by`s SHALL
+leave the query unsplit and SHALL NOT fall through to the hyphen, because the delimiter is then
+genuinely undecidable.
+
+Where `by`-precedence guesses wrong — a title that itself contains `by`, followed by a hyphen
+separator — the mis-split SHALL be caught by the validation gate and recovered by the raw fallback.
+`by`-precedence is therefore never less correct than refusing to split, only one request more
+expensive when it guesses wrong.
+
 #### Scenario: Title and artist separated by "by"
 - **WHEN** the query is `seven dollars by happy birthday mr baskets`
 - **THEN** the search is issued with `q` equal to `track:"seven dollars" artist:"happy birthday mr baskets"`
@@ -122,6 +134,22 @@ contains a recognized Spotify field filter (`track:`, `artist:`, `album:`, `year
 #### Scenario: Separator occurs more than once
 - **WHEN** the query contains the word `by` two or more times, such as `Stand By Me by Ben E. King`
 - **THEN** no split occurs
+- **AND** the search is issued with the raw query
+
+#### Scenario: A single "by" outranks a hyphen belonging to the title
+- **WHEN** the query is `Toxic - Radio Edit by Britney Spears`, containing one `by` and one spaced hyphen
+- **THEN** the split occurs at the `by`, not at the hyphen
+- **AND** the search is issued with `q` equal to `track:"Toxic - Radio Edit" artist:"Britney Spears"`
+
+#### Scenario: A "by" inside the title mis-splits and is recovered
+- **WHEN** the query is `Stand By Me - Ben E. King`, where `by` sits inside the title and the hyphen is the real separator
+- **THEN** the split occurs at the `by`, yielding `track:"Stand" artist:"Me - Ben E. King"`
+- **AND** the leftover `me` token causes validation to fail
+- **AND** the raw fallback recovers the correct track, so the request still succeeds
+
+#### Scenario: Two "by"s do not fall through to the hyphen
+- **WHEN** the query is `Stand By Me - covered by Ben E. King`, containing two `by`s and one spaced hyphen
+- **THEN** no split occurs on either separator
 - **AND** the search is issued with the raw query
 
 #### Scenario: No separator present

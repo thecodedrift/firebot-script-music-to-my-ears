@@ -215,6 +215,29 @@ describe("normalizeQuery", () => {
     expect(normalizeQuery(query)).toEqual({ kind: "raw", q: query });
   });
 
+  it("prefers a single `by` over a spaced hyphen when both are present", () => {
+    // Spotify's own titles use ` - ` for version suffixes, so here the dash
+    // belongs to the title and only the `by` separates artist from track.
+    expect(normalizeQuery("Toxic - Radio Edit by Britney Spears")).toMatchObject({
+      kind: "filtered",
+      q: 'track:"Toxic - Radio Edit" artist:"Britney Spears"',
+    });
+  });
+
+  it("mis-splits `by` inside a title ahead of the real dash separator", () => {
+    // Documents the known cost of `by`-precedence. The leftover `me` token makes
+    // this fail validation, and the raw fallback recovers it (see searchTrack).
+    expect(normalizeQuery("Stand By Me - Ben E. King")).toMatchObject({
+      kind: "filtered",
+      q: 'track:"Stand" artist:"Me - Ben E. King"',
+    });
+  });
+
+  it("still refuses to split two `by`s even when a hyphen is present", () => {
+    const query = "Stand By Me - covered by Ben E. King";
+    expect(normalizeQuery(query)).toEqual({ kind: "raw", q: query });
+  });
+
   it("leaves a query with no separator alone", () => {
     expect(normalizeQuery("Jump")).toEqual({ kind: "raw", q: "Jump" });
   });
