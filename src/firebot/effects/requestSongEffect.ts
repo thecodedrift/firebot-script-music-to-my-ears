@@ -12,6 +12,8 @@ interface Model {
   allowExplicit: boolean;
   /** Per-effect blocked terms (substring, case-insensitive). */
   blockedTerms: string[];
+  /** Emit verbose search diagnostics for this effect. Off by default. */
+  enableLogging: boolean;
 }
 
 interface Outputs {
@@ -93,6 +95,17 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
         A track is rejected when any term appears (case-insensitive) in its artist or track name.
       </p>
     </eos-container>
+    <eos-container header="Troubleshooting" pad-top="true">
+      <label class="control-fb control--checkbox">Enable logging
+        <input type="checkbox" ng-model="effect.enableLogging" />
+        <div class="control__indicator"></div>
+      </label>
+      <p class="muted">
+        When on, writes the Spotify search query, every candidate returned, the total number of
+        matches, and the raw response to the Firebot log. Verbose by design — turn it on to work
+        out why a request matched the wrong track, then turn it back off.
+      </p>
+    </eos-container>
   `,
   // IMPORTANT: optionsController is stringified and eval'd on the FRONTEND, so it
   // must not reference any bundled import or module variable (that throws e.g.
@@ -115,6 +128,9 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
     if ($scope.effect.blockedTerms === undefined) {
       $scope.effect.blockedTerms = ["karaoke", "instrumental", "inst."];
     }
+    if ($scope.effect.enableLogging === undefined) {
+      $scope.effect.enableLogging = false;
+    }
   },
   onTriggerEvent: async ({ effect, trigger }) => {
     const query = (effect.query ?? "").trim();
@@ -124,7 +140,7 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
 
     let track: Track | undefined;
     try {
-      track = await searchTrack(query);
+      track = await searchTrack(query, { log: Boolean(effect.enableLogging) });
       if (!track) {
         return failure("not-found");
       }

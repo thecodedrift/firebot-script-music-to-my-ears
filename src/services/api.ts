@@ -172,14 +172,27 @@ function toTrack(item: SpotifyTrack): Track {
  * `market=from_token` value (Nov 2024) and now rejects it with a 400 on some
  * endpoints/accounts. Per the current docs, when a valid user access token is
  * present the account's own country takes priority automatically, so omitting
- * `market` gives the correct per-account catalog (and `is_playable`) without the
- * deprecated value. See https://developer.spotify.com/documentation/web-api/reference/search
+ * `market` gives the correct per-account catalog without the deprecated value.
+ *
+ * What it does NOT give us is `is_playable`: that field only appears when Spotify
+ * applies track relinking, which requires an explicit `market`. So search results
+ * carry no playability signal at all — see `SEARCH_LIMIT` and `runSearch` below.
+ * See https://developer.spotify.com/documentation/web-api/reference/search
  */
 
 /**
- * How many search results to fetch. Spotify's relevance ranking is unreliable
- * at limit=1 (it can return a worse match than the obvious one); fetching a
- * handful and taking the first playable result fixes that. See search tests.
+ * How many search results to fetch.
+ *
+ * Note this does NOT currently buy us a better pick. `is_playable` is only
+ * returned when Spotify applies track relinking, which requires a `market`
+ * parameter — and we send none (see above). So the `is_playable !== false`
+ * predicate in `runSearch` never filters anything and selection always resolves
+ * to `items[0]`; the other four results are fetched and discarded.
+ *
+ * We keep the limit at 5 because the opt-in diagnostics log the full candidate
+ * list: that is how we will find out how often `items[0]` is the wrong pick,
+ * before spending a behavior change on it. Genuinely ranking these candidates
+ * (which means sending `market`) is deliberately deferred to its own change.
  */
 const SEARCH_LIMIT = 5;
 
@@ -227,36 +240,256 @@ export async function getTrack(id: string): Promise<Track | undefined> {
   return toTrack(data);
 }
 
+/** Spotify query filters we recognize; a query using one is passed through as-is. */
+const FIELD_FILTER_RE = /\b(?:track|artist|album|year|genre|isrc|upc|tag):/i;
+
+/** `by` as a whole word. */
+const BY_SEPARATOR_RE = /\bby\b/gi;
 /**
- * Resolves a track request. A Spotify URL/URI/id is looked up directly;
- * anything else is searched (tracks only) and the first playable result is
- * returned. Returns undefined when nothing playable matches.
+ * A *spaced* hyphen only. Requiring the spaces is what keeps `Jay-Z` and
+ * `Blink-182` from being torn into a bogus title/artist pair.
  */
-export async function searchTrack(query: string): Promise<Track | undefined> {
+const DASH_SEPARATOR = " - ";
+
+/** The outcome of {@link normalizeQuery}: either field filters, or the raw text. */
+type NormalizedQuery =
+  | { kind: "filtered"; q: string; title: string; artist: string }
+  | { kind: "raw"; q: string };
+
+/**
+ * Lowercases, strips diacritics and punctuation, and splits into a token set.
+ * Token-level comparison is deliberate: substring matching would let the parsed
+ * artist `me` (from `Stand By Me`) match `Mestizo`.
+ */
+export function tokenize(text: string): Set<string> {
+  const cleaned = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ");
+  return new Set(cleaned.split(/\s+/).filter(Boolean));
+}
+
+/** Splits `<title> <sep> <artist>` when exactly one separator is present. */
+function splitOnSeparator(query: string): { title: string; artist: string } | undefined {
+  const byMatches = query.match(BY_SEPARATOR_RE);
+  if (byMatches?.length === 1) {
+    const at = query.search(BY_SEPARATOR_RE);
+    return { title: query.slice(0, at), artist: query.slice(at + byMatches[0].length) };
+  }
+  // Only fall through to the dash when `by` was absent entirely. Two `by`s (or a
+  // `by` plus a dash) means we cannot tell which token is the delimiter.
+  if (byMatches) {
+    return undefined;
+  }
+  const parts = query.split(DASH_SEPARATOR);
+  if (parts.length === 2) {
+    return { title: parts[0], artist: parts[1] };
+  }
+  return undefined;
+}
+
+/**
+ * Turns free text into Spotify field filters when the shape is unambiguous.
+ *
+ * The split rule is deliberately dumb — a title containing the word `by` will
+ * split wrongly. That is fine, and by design: `searchTrack` validates the result
+ * of a filtered search and falls back to the raw query when it does not hold up.
+ * Validation, not this function, is the gate.
+ *
+ * For the dash form we assume `Title - Artist`. `Artist - Title` is an equally
+ * real convention and is syntactically indistinguishable, so it fails validation
+ * and falls back — costing one extra request, never a wrong answer.
+ */
+export function normalizeQuery(query: string): NormalizedQuery {
+  const raw: NormalizedQuery = { kind: "raw", q: query };
+
+  // The requester already speaks Spotify's query language; don't second-guess it.
+  if (FIELD_FILTER_RE.test(query)) {
+    return raw;
+  }
+
+  const split = splitOnSeparator(query);
+  if (!split) {
+    return raw;
+  }
+
+  const title = split.title.trim();
+  const artist = split.artist.trim();
+  // A side that is empty, or is pure punctuation, carries no signal to match on.
+  if (!tokenize(title).size || !tokenize(artist).size) {
+    return raw;
+  }
+
+  return {
+    kind: "filtered",
+    // Stripping `"` keeps a crafted query from closing our filter and injecting
+    // another one. Spotify's docs show the filters unquoted, but never say how a
+    // multi-word value binds; quoting is the only unambiguous form. The opt-in
+    // diagnostics log this `q` next to the raw response so we can confirm it.
+    q: `track:"${title.replace(/"/g, "")}" artist:"${artist.replace(/"/g, "")}"`,
+    title,
+    artist,
+  };
+}
+
+/** Why a filtered result was accepted or rejected. */
+export interface MatchVerdict {
+  ok: boolean;
+  reason?: string;
+}
+
+/**
+ * Checks that a filtered search actually returned what we asked for: every token
+ * of the parsed title must appear in the track's name, and every token of the
+ * parsed artist in the union of its artists' names.
+ *
+ * Containment is directional (parsed ⊆ actual), so Spotify's decorations survive:
+ * `Seven Dollars - 2024 Remaster` still contains `{seven, dollars}`.
+ */
+export function validateMatch(item: SpotifyTrack, title: string, artist: string): MatchVerdict {
+  const nameTokens = tokenize(item.name);
+  const artistTokens = new Set(item.artists.flatMap((a) => [...tokenize(a.name)]));
+
+  const missingTitle = [...tokenize(title)].filter((t) => !nameTokens.has(t));
+  if (missingTitle.length) {
+    return {
+      ok: false,
+      reason: `track name is missing title token(s): ${missingTitle.join(", ")}`,
+    };
+  }
+
+  const missingArtist = [...tokenize(artist)].filter((t) => !artistTokens.has(t));
+  if (missingArtist.length) {
+    return { ok: false, reason: `artists are missing token(s): ${missingArtist.join(", ")}` };
+  }
+
+  return { ok: true };
+}
+
+/** Per-call knobs for {@link searchTrack}. */
+export interface SearchOptions {
+  /** Emit verbose per-attempt diagnostics. Off unless the streamer opted in. */
+  log?: boolean;
+}
+
+interface SearchAttempt {
+  endpoint: string;
+  data: SpotifySearchResponse | undefined;
+  items: SpotifyTrack[];
+  selected: SpotifyTrack | undefined;
+}
+
+/** Issues one `/search` call and picks a candidate. */
+async function runSearch(q: string): Promise<SearchAttempt> {
+  const params = new URLSearchParams({ q, type: "track", limit: String(SEARCH_LIMIT) });
+  const endpoint = `/search?${params.toString()}`;
+  const { data } = await spotifyFetch<SpotifySearchResponse>(endpoint);
+  const items = data?.tracks?.items ?? [];
+  // This predicate reads like it filters unplayable tracks, but `is_playable` is
+  // absent without a `market` param (see the note on SEARCH_LIMIT), so it always
+  // resolves to items[0]. Kept as the honest expression of intent for the day we
+  // send `market`; the diagnostics below record the candidates it passed over.
+  const selected = items.find((item) => item.is_playable !== false);
+  return { endpoint, data, items, selected };
+}
+
+/**
+ * Opt-in diagnostics for one search attempt.
+ *
+ * Deliberately does NOT call `redactEndpoint()`. That redaction exists so the
+ * always-on failure-triage block in `spotifyFetch` is safe to paste into a public
+ * issue. This channel is the opposite: the streamer ticked a box asking to see
+ * exactly the query text and the response body, for their own viewer's request.
+ * Do not "fix" one of these two sites into the other.
+ *
+ * Emitted at `info`, not `debug`: Firebot hides `debug` unless the global log
+ * level is raised, which would make the per-effect checkbox useless on its own.
+ *
+ * The invariant both channels share: never emit the bearer token, the refresh
+ * token, or the client secret. We log the endpoint and body only, never headers.
+ */
+function logAttempt(
+  kind: "filtered" | "raw",
+  q: string,
+  attempt: SearchAttempt,
+  verdict: MatchVerdict | undefined,
+  options: SearchOptions
+): void {
+  if (!options.log) {
+    return;
+  }
+  logger.info(
+    `Song request search [${kind}]: ${JSON.stringify(
+      {
+        attempt: kind,
+        query: q,
+        endpoint: attempt.endpoint,
+        // `totalMatches` is how many tracks Spotify found; `returnedItems` is
+        // just this page. Only the former answers "how many possible matches".
+        totalMatches: attempt.data?.tracks?.total,
+        returnedItems: attempt.items.length,
+        candidates: attempt.items.map((item) => ({
+          uri: item.uri,
+          name: item.name,
+          artists: item.artists.map((a) => a.name),
+          explicit: item.explicit,
+          is_playable: item.is_playable,
+        })),
+        selected: attempt.selected?.uri,
+        validation: verdict ?? "n/a (raw query is accepted without validation)",
+        rawResponse: attempt.data,
+      },
+      undefined,
+      2
+    )}`
+  );
+}
+
+/**
+ * Resolves a track request. A Spotify URL/URI/id is looked up directly. Anything
+ * else is normalized into `track:`/`artist:` filters when its shape is
+ * unambiguous, searched (tracks only), and the result validated; a filtered
+ * search that returns nothing or fails validation retries exactly once with the
+ * raw query. At most two searches are issued. Returns undefined when nothing
+ * matches.
+ */
+export async function searchTrack(
+  query: string,
+  options: SearchOptions = {}
+): Promise<Track | undefined> {
   const id = parseTrackId(query);
   if (id) {
     return getTrack(id);
   }
 
-  const params = new URLSearchParams({
-    q: query,
-    type: "track",
-    limit: String(SEARCH_LIMIT),
-  });
-  const { data } = await spotifyFetch<SpotifySearchResponse>(`/search?${params.toString()}`);
-  const items = data?.tracks?.items ?? [];
-  const playable = items.find((item) => item.is_playable !== false);
-  if (!playable) {
+  const normalized = normalizeQuery(query);
+
+  if (normalized.kind === "filtered") {
+    const attempt = await runSearch(normalized.q);
+    const verdict = attempt.selected
+      ? validateMatch(attempt.selected, normalized.title, normalized.artist)
+      : { ok: false, reason: "filtered search returned no tracks" };
+    logAttempt("filtered", normalized.q, attempt, verdict, options);
+    if (attempt.selected && verdict.ok) {
+      return toTrack(attempt.selected);
+    }
+    // Fall through: the split was wrong, or the filters were too narrow.
+  }
+
+  const attempt = await runSearch(query);
+  logAttempt("raw", query, attempt, undefined, options);
+  if (!attempt.selected) {
     // The effect turns `undefined` into a silent "not-found"; log here so a
     // name search that resolves to nothing is diagnosable (empty result set vs.
     // results that were all filtered out as unplayable in the account's market).
     logger.debug(
-      `Spotify search for ${JSON.stringify(query)} returned ${items.length} track(s), ` +
+      `Spotify search for ${JSON.stringify(query)} returned ${attempt.items.length} track(s), ` +
         "none playable"
     );
     return undefined;
   }
-  return toTrack(playable);
+  return toTrack(attempt.selected);
 }
 
 /** Adds a track URI to the active device's playback queue. */
