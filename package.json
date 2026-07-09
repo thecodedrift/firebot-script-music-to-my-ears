@@ -1,6 +1,6 @@
 {
   "name": "firebot-script-music-to-my-ears",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "private": true,
   "description": "A Firebot custom script adding Spotify song-request and playback effects.",
   "scriptOutputName": "musicToMyEars",
