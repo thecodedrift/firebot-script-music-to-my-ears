@@ -34,8 +34,11 @@ export interface SpotifyTrack {
   artists: Array<{ name: string }>;
   type: string;
   /**
-   * Present only when the request supplied a `market` (we use `from_token`).
-   * `false` means the track can't be played for the linked account/region.
+   * Present only when Spotify applies track relinking, which requires the
+   * request to supply a `market`. We deliberately send none (see the note above
+   * `SEARCH_LIMIT` in `services/api.ts`), so on our responses this field is
+   * effectively always `undefined`. `false` would mean the track can't be played
+   * for the linked account/region.
    */
   is_playable?: boolean;
   /** Why a track is unplayable: `market`, `product`, or `explicit`. */
@@ -45,6 +48,10 @@ export interface SpotifyTrack {
 export interface SpotifySearchResponse {
   tracks?: {
     items: SpotifyTrack[];
+    /** Total matches Spotify found, which is not the number of `items` returned. */
+    total?: number;
+    /** Page size Spotify applied, i.e. the `limit` we asked for. */
+    limit?: number;
   };
 }
 

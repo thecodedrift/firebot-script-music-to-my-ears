@@ -69,8 +69,8 @@ live("spotify search (live)", () => {
   });
 });
 
-// Regression cases for reported search bugs. These FAIL against the current
-// limit=1 / text-only implementation and should pass once the fix lands.
+// Regression cases for search bugs reported against earlier implementations
+// (limit=1 ranking, text-only queries). These must keep passing.
 live("spotify search (reported bugs)", () => {
   jest.setTimeout(20_000);
 
@@ -118,5 +118,67 @@ live("spotify search (reported bugs)", () => {
   it("returns undefined for a nonexistent track id", async () => {
     const track = await searchTrack("0000000000000000000000");
     expect(track).toBeUndefined();
+  });
+
+  // Bug 3: "<title> by <artist>" ranked an unrelated track first, because the
+  // artist tokens competed against track titles in the free-text query.
+  it("finds the right track when the artist is named after 'by'", async () => {
+    const track = await searchTrack("seven dollars by happy birthday mr baskets");
+    expect(track).not.toBeNull();
+    expect(track!.name).toMatch(/seven dollars/i);
+    expect(track!.artist).toMatch(/happy birthday mr\.? baskets/i);
+  });
+
+  // The dumb split mangles this into track:"Stand" artist:"Me"; validation must
+  // reject that and the raw fallback must recover the real track.
+  it("recovers a title containing the separator word via the raw fallback", async () => {
+    const track = await searchTrack("Stand By Me");
+    expect(track).not.toBeNull();
+    expect(track!.name).toMatch(/stand by me/i);
+  });
+});
+
+/**
+ * Probes the one assumption `normalizeQuery` rests on: that Spotify honors
+ * DOUBLE-QUOTED multi-word field filter values.
+ *
+ * Spotify's docs only ever show filters unquoted (`q=remaster track:Doxy
+ * artist:Miles Davis`) and never state how a multi-word value binds. Quoting is
+ * convention, not contract. If Spotify ever stops honoring it, these fail loudly
+ * here rather than silently degrading every song request to the raw fallback.
+ */
+live("spotify search (quoted field-filter assumption)", () => {
+  jest.setTimeout(20_000);
+
+  beforeAll(() => {
+    initHarnessModules(readEnv());
+  });
+
+  it("honors a quoted multi-word artist filter", async () => {
+    const params = new URLSearchParams({
+      q: 'track:"Walk the Dinosaur" artist:"Ninja Sex Party"',
+      type: "track",
+      limit: "5",
+    });
+    const { data } = await spotifyFetch<SpotifySearchResponse>(`/search?${params.toString()}`);
+
+    const items = data?.tracks?.items ?? [];
+    expect(items.length).toBeGreaterThan(0);
+    expect(items[0].name).toMatch(/walk the dinosaur/i);
+    expect(items[0].artists.map((a) => a.name).join(", ")).toMatch(/ninja sex party/i);
+  });
+
+  it("scopes a quoted filter to its field, rather than leaking it as free text", async () => {
+    // If quoting were ignored and the value leaked into free-text matching, an
+    // artist filter naming a track title would still return that track. It must not.
+    const params = new URLSearchParams({
+      q: 'artist:"Walk the Dinosaur"',
+      type: "track",
+      limit: "5",
+    });
+    const { data } = await spotifyFetch<SpotifySearchResponse>(`/search?${params.toString()}`);
+
+    const names = (data?.tracks?.items ?? []).map((item) => item.name.toLowerCase());
+    expect(names).not.toContain("walk the dinosaur");
   });
 });
