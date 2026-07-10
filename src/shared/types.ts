@@ -8,11 +8,26 @@ export type ErrorReason =
   | "not-playable"
   | "blocked-term"
   | "explicit"
+  | "too-long"
   | "recently-played"
+  | "artist-recently-played"
+  | "user-artist-recently-played"
   | "no-active-device"
   | "not-premium"
   | "not-linked"
   | "unknown";
+
+/**
+ * Reasons that clear on their own once a cooldown elapses, as opposed to the
+ * permanent ones (a track that is too long stays too long). Only these carry a
+ * non-zero `errorCooldown`, and only these compete on remaining wait — see
+ * `resolveCooldown` in `services/restrictions.ts`.
+ */
+export const TRANSIENT_REASONS = [
+  "recently-played",
+  "artist-recently-played",
+  "user-artist-recently-played",
+] as const satisfies readonly ErrorReason[];
 
 /** Normalized track shape used across services and effects. */
 export interface Track {
@@ -21,6 +36,14 @@ export interface Track {
   /** Joined artist names, e.g. "Daft Punk, Pharrell Williams". */
   artist: string;
   artists: string[];
+  /**
+   * Spotify artist ids, positionally aligned with `artists`. Index 0 is the
+   * primary artist — a Spotify convention rather than a documented guarantee,
+   * which the artist cooldowns rely on knowingly. Cooldowns key on these ids and
+   * never on names: names collide across unrelated artists and vary by casing
+   * and diacritics.
+   */
+  artistIds: string[];
   explicit: boolean;
   durationMs: number;
 }

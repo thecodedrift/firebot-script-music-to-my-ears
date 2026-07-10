@@ -40,13 +40,6 @@ const script: Firebot.CustomScript<Params> = {
       description: "The client secret for the same Spotify app.",
       default: "",
     },
-    noRepeatMinutes: {
-      type: "number",
-      title: "No-Repeat Window (minutes)",
-      description: "A queued track cannot be requested again within this many minutes.",
-      default: 30,
-      validation: { min: 0 },
-    },
   }),
 
   run: (runRequest) => {

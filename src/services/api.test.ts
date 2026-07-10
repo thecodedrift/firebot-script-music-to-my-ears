@@ -289,7 +289,10 @@ function makeTrack(over: Partial<SpotifyTrack> = {}): SpotifyTrack {
     name: "Seven Dollars",
     explicit: false,
     duration_ms: 235000,
-    artists: [{ name: "Happy Birthday Mr. Baskets" }, { name: "Kasane Teto" }],
+    artists: [
+      { id: "artist-hbmb", name: "Happy Birthday Mr. Baskets" },
+      { id: "artist-teto", name: "Kasane Teto" },
+    ],
     type: "track",
     ...over,
   };
@@ -313,7 +316,7 @@ describe("validateMatch", () => {
 
   it("fails on a substring that is not a whole token", () => {
     // The `Stand By Me` mis-split: `me` is inside `Mestizo` but is not a token of it.
-    const track = makeTrack({ name: "Stand", artists: [{ name: "Mestizo" }] });
+    const track = makeTrack({ name: "Stand", artists: [{ id: "artist-mestizo", name: "Mestizo" }] });
     const verdict = validateMatch(track, "stand", "me");
     expect(verdict.ok).toBe(false);
     expect(verdict.reason).toContain("me");
@@ -370,8 +373,8 @@ describe("searchTrack", () => {
   });
 
   it("falls back to the raw query exactly once when validation fails", async () => {
-    const wrong = makeTrack({ name: "Stand", artists: [{ name: "Ben E. King" }] });
-    const right = makeTrack({ name: "Stand By Me", artists: [{ name: "Ben E. King" }] });
+    const wrong = makeTrack({ name: "Stand", artists: [{ id: "artist-ben-e-king", name: "Ben E. King" }] });
+    const right = makeTrack({ name: "Stand By Me", artists: [{ id: "artist-ben-e-king", name: "Ben E. King" }] });
     mockFetch
       .mockResolvedValueOnce(okResponse(searchBody([wrong])))
       .mockResolvedValueOnce(okResponse(searchBody([right])));
@@ -396,7 +399,7 @@ describe("searchTrack", () => {
   });
 
   it("issues exactly one unvalidated search for an unsplit query", async () => {
-    const unrelated = makeTrack({ name: "Something Else", artists: [{ name: "Nobody" }] });
+    const unrelated = makeTrack({ name: "Something Else", artists: [{ id: "artist-nobody", name: "Nobody" }] });
     mockFetch.mockResolvedValueOnce(okResponse(searchBody([unrelated])));
 
     const track = await searchTrack("daft punk");
@@ -460,8 +463,8 @@ describe("searchTrack", () => {
     });
 
     it("emits both attempts on fallback, with the failing reason", async () => {
-      const wrong = makeTrack({ name: "Stand", artists: [{ name: "Ben E. King" }] });
-      const right = makeTrack({ name: "Stand By Me", artists: [{ name: "Ben E. King" }] });
+      const wrong = makeTrack({ name: "Stand", artists: [{ id: "artist-ben-e-king", name: "Ben E. King" }] });
+      const right = makeTrack({ name: "Stand By Me", artists: [{ id: "artist-ben-e-king", name: "Ben E. King" }] });
       mockFetch
         .mockResolvedValueOnce(okResponse(searchBody([wrong])))
         .mockResolvedValueOnce(okResponse(searchBody([right])));

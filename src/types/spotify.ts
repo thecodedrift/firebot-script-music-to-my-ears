@@ -31,7 +31,7 @@ export interface SpotifyTrack {
   name: string;
   explicit: boolean;
   duration_ms: number;
-  artists: Array<{ name: string }>;
+  artists: Array<{ id: string; name: string }>;
   type: string;
   /**
    * Present only when Spotify applies track relinking, which requires the

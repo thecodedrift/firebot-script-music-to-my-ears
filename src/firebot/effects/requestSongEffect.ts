@@ -1,17 +1,33 @@
 import { Effects } from "@crowbartools/firebot-custom-scripts-types/types/effects";
-import { getParams, logger } from "../../modules";
+import { logger } from "../../modules";
 import { queueTrack, searchTrack, toErrorReason } from "../../services/api";
-import { isRecent, record } from "../../services/ledger";
-import { findBlockedTerm, isExplicitBlocked } from "../../services/moderation";
+import { errorTextFor } from "../../services/errorText";
+import { record } from "../../services/ledger";
+import { findBlockedTerm, isExplicitBlocked, isTooLong } from "../../services/moderation";
+import { cooldownSeconds, resolveCooldown } from "../../services/restrictions";
 import { namespaced } from "../../shared/constants";
 import { ErrorReason, Track } from "../../shared/types";
-import { DEFAULT_BLOCKED_TERMS } from "../../types/params";
+import {
+  DEFAULT_ARTIST_COOLDOWN_MINUTES,
+  DEFAULT_BLOCKED_TERMS,
+  DEFAULT_MAX_TRACK_LENGTH_SECONDS,
+  DEFAULT_NO_REPEAT_MINUTES,
+  DEFAULT_USER_ARTIST_COOLDOWN_MINUTES,
+} from "../../types/params";
 
 interface Model {
   query: string;
   allowExplicit: boolean;
   /** Per-effect blocked terms (substring, case-insensitive). */
   blockedTerms: string[];
+  /** Minutes the same track is ineligible to be requested again. 0 disables. */
+  noRepeatMinutes: number;
+  /** Minutes an artist is ineligible for anyone. 0 disables. */
+  artistCooldownMinutes: number;
+  /** Minutes an artist is ineligible for the same requester. 0 disables. */
+  userArtistCooldownMinutes: number;
+  /** Longest track that may be queued, in seconds. 0 disables. */
+  maxTrackLengthSeconds: number;
   /** Emit verbose search diagnostics for this effect. Off by default. */
   enableLogging: boolean;
 }
@@ -22,9 +38,36 @@ interface Outputs {
   trackName: string;
   artistName: string;
   errorReason: ErrorReason | "";
+  errorText: string;
+  /** Seconds until the reported cooldown expires; 0 for every other reason. */
+  errorCooldown: number;
 }
 
-function failure(reason: ErrorReason, track?: Track): { success: boolean; outputs: Outputs } {
+/**
+ * Reads a numeric model field, falling back only when it was never set.
+ *
+ * Accepts a numeric string as well as a number: Firebot's `firebot-input` may
+ * hand back `"60"` rather than `60`. Rejecting a string here would silently fall
+ * back to the default and quietly disable a restriction the streamer configured.
+ */
+export function num(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return fallback;
+}
+
+function failure(
+  reason: ErrorReason,
+  track?: Track,
+  cooldown = 0
+): { success: boolean; outputs: Outputs } {
   // Top-level `success` must stay `true`: Firebot's effect-runner only registers
   // `outputs` when the effect reports success (it discards them on `success: false`),
   // which would blank out `errorReason` for downstream effects. The pass/fail the
@@ -37,6 +80,14 @@ function failure(reason: ErrorReason, track?: Track): { success: boolean; output
       trackName: track?.name ?? "",
       artistName: track?.artist ?? "",
       errorReason: reason,
+      errorText: errorTextFor(reason, {
+        trackName: track?.name,
+        // The primary artist, not the joined credit list: that is what the
+        // artist cooldowns key on, so it is what the message must name.
+        artistName: track?.artists[0],
+        cooldown: cooldown || undefined,
+      }),
+      errorCooldown: cooldown,
     },
   };
 }
@@ -68,9 +119,21 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
       {
         label: "Error Reason",
         description:
-          "Why the request failed: not-found, not-playable, blocked-term, explicit, " +
-          "recently-played, no-active-device, not-premium, not-linked.",
+          "Why the request failed: not-found, not-playable, blocked-term, explicit, too-long, " +
+          "recently-played, artist-recently-played, user-artist-recently-played, " +
+          "no-active-device, not-premium, not-linked.",
         defaultName: "errorReason",
+      },
+      {
+        label: "Error Text",
+        description: "A friendly explanation of the failure, ready to send to chat.",
+        defaultName: "errorText",
+      },
+      {
+        label: "Error Cooldown",
+        description:
+          "Seconds until the reported cooldown expires. 0 when the failure was not a cooldown.",
+        defaultName: "errorCooldown",
       },
     ],
   },
@@ -88,12 +151,51 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
         <div class="control__indicator"></div>
       </label>
       <p class="muted">When off (default), tracks Spotify marks explicit are rejected.</p>
-    </eos-container>
-    <eos-container header="Blocked Terms" pad-top="true">
+      <h4 style="margin-top:15px">Blocked terms</h4>
       <editable-list model="effect.blockedTerms" settings="blockedTermsSettings"></editable-list>
       <p class="muted">
         A track is rejected when any term appears (case-insensitive) in its artist or track name.
       </p>
+    </eos-container>
+    <eos-container header="Restrictions" pad-top="true">
+      <p class="muted">
+        Keeps one track — or one artist — from crowding out the queue. Set any to
+        <code>0</code> to turn it off.
+      </p>
+      <firebot-input
+        input-title="Same track cooldown (minutes)"
+        input-type="number"
+        model="effect.noRepeatMinutes"
+        placeholder-text="30"
+      />
+      <p class="muted">How long before the same track can be requested again.</p>
+      <firebot-input
+        input-title="Artist cooldown (minutes)"
+        input-type="number"
+        model="effect.artistCooldownMinutes"
+        placeholder-text="0"
+        style="margin-top:10px"
+      />
+      <p class="muted">
+        How long before that artist can be requested again <b>by anyone</b>. This protects the
+        variety of the playlist, so it applies to every viewer — not only the one who requested it.
+      </p>
+      <firebot-input
+        input-title="Artist cooldown per viewer (minutes)"
+        input-type="number"
+        model="effect.userArtistCooldownMinutes"
+        placeholder-text="0"
+        style="margin-top:10px"
+      />
+      <p class="muted">How long before the <b>same viewer</b> can request that artist again.</p>
+      <firebot-input
+        input-title="Maximum track length (seconds)"
+        input-type="number"
+        model="effect.maxTrackLengthSeconds"
+        placeholder-text="0"
+        style="margin-top:10px"
+      />
+      <p class="muted">Longest track that may be queued. 420 is a reasonable 7-minute cap.</p>
     </eos-container>
     <eos-container header="Troubleshooting" pad-top="true">
       <label class="control-fb control--checkbox">Enable logging
@@ -110,8 +212,9 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
   // IMPORTANT: optionsController is stringified and eval'd on the FRONTEND, so it
   // must not reference any bundled import or module variable (that throws e.g.
   // "params_1 is not defined"). Use only $scope, Angular services, and literals.
-  // The default terms are intentionally inlined here for that reason; the backend
-  // onTriggerEvent uses the imported DEFAULT_BLOCKED_TERMS instead.
+  // The defaults are intentionally inlined here for that reason; the backend
+  // onTriggerEvent uses the imported DEFAULT_* constants instead. Keep in sync
+  // with src/types/params.ts.
   optionsController: ($scope) => {
     $scope.blockedTermsSettings = {
       sortable: false,
@@ -131,6 +234,18 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
     if ($scope.effect.enableLogging === undefined) {
       $scope.effect.enableLogging = false;
     }
+    if ($scope.effect.noRepeatMinutes === undefined) {
+      $scope.effect.noRepeatMinutes = 30;
+    }
+    if ($scope.effect.artistCooldownMinutes === undefined) {
+      $scope.effect.artistCooldownMinutes = 0;
+    }
+    if ($scope.effect.userArtistCooldownMinutes === undefined) {
+      $scope.effect.userArtistCooldownMinutes = 0;
+    }
+    if ($scope.effect.maxTrackLengthSeconds === undefined) {
+      $scope.effect.maxTrackLengthSeconds = 0;
+    }
   },
   onTriggerEvent: async ({ effect, trigger }) => {
     const query = (effect.query ?? "").trim();
@@ -145,6 +260,9 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
         return failure("not-found");
       }
 
+      // Permanent rejections first, first match wins: a track that is too long or
+      // explicit will never succeed, so "don't ask again" beats "ask again later".
+      //
       // Per-effect terms; fall back to defaults only when the field was never set.
       const blockedTerms = Array.isArray(effect.blockedTerms)
         ? effect.blockedTerms
@@ -155,15 +273,30 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
       if (isExplicitBlocked(track, Boolean(effect.allowExplicit))) {
         return failure("explicit", track);
       }
+      if (isTooLong(track, num(effect.maxTrackLengthSeconds, DEFAULT_MAX_TRACK_LENGTH_SECONDS))) {
+        return failure("too-long", track);
+      }
 
-      const { noRepeatMinutes } = getParams();
-      if (isRecent(track.uri, noRepeatMinutes * 60_000)) {
-        return failure("recently-played", track);
+      // Then the transient cooldowns, resolved together: when several apply, the
+      // one with the longest remaining wait is reported, so the retry advice in
+      // `errorCooldown` is true rather than merely specific.
+      const requestedBy = trigger?.metadata?.username ?? "";
+      const hit = resolveCooldown(track, requestedBy, {
+        noRepeatMinutes: num(effect.noRepeatMinutes, DEFAULT_NO_REPEAT_MINUTES),
+        artistCooldownMinutes: num(effect.artistCooldownMinutes, DEFAULT_ARTIST_COOLDOWN_MINUTES),
+        userArtistCooldownMinutes: num(
+          effect.userArtistCooldownMinutes,
+          DEFAULT_USER_ARTIST_COOLDOWN_MINUTES
+        ),
+      });
+      if (hit) {
+        return failure(hit.reason, track, cooldownSeconds(hit.remainingMs));
       }
 
       await queueTrack(track.uri);
-      // Atomic with the check above: record only what was actually queued.
-      record(track.uri, trigger?.metadata?.username ?? "");
+      // Atomic with the checks above: record only what was actually queued. Writes
+      // are unconditional — a disabled window here must not hole another effect's.
+      record(track.uri, requestedBy, track.artistIds[0]);
 
       return {
         success: true,
@@ -173,6 +306,8 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
           trackName: track.name,
           artistName: track.artist,
           errorReason: "",
+          errorText: "",
+          errorCooldown: 0,
         },
       };
     } catch (error) {

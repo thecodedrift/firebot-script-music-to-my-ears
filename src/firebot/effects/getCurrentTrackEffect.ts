@@ -1,6 +1,7 @@
 import { Effects } from "@crowbartools/firebot-custom-scripts-types/types/effects";
 import { logger } from "../../modules";
 import { currentTrack, toErrorReason } from "../../services/api";
+import { errorTextFor } from "../../services/errorText";
 import { requesterOf } from "../../services/ledger";
 import { namespaced } from "../../shared/constants";
 import { ErrorReason } from "../../shared/types";
@@ -14,6 +15,7 @@ interface Outputs {
   trackUri: string;
   requestedBy: string;
   errorReason: ErrorReason | "";
+  errorText: string;
 }
 
 export const getCurrentTrackEffect: Effects.EffectType<Model, unknown, Outputs> = {
@@ -46,6 +48,11 @@ export const getCurrentTrackEffect: Effects.EffectType<Model, unknown, Outputs> 
         description: "Failure reason, when the lookup fails.",
         defaultName: "errorReason",
       },
+      {
+        label: "Error Text",
+        description: "A friendly explanation of the failure, ready to send to chat.",
+        defaultName: "errorText",
+      },
     ],
   },
   optionsTemplate: `
@@ -65,10 +72,12 @@ export const getCurrentTrackEffect: Effects.EffectType<Model, unknown, Outputs> 
           trackUri: track?.uri ?? "",
           requestedBy: track ? requesterOf(track.uri) ?? "" : "",
           errorReason: "",
+          errorText: "",
         },
       };
     } catch (error) {
       logger.warn(`Get Current Track failed: ${String(error)}`);
+      const reason = toErrorReason(error);
       // Top-level `success` stays `true` so Firebot keeps `outputs`; it discards
       // them on `success: false`, which would blank the failure's `errorReason`.
       // The real pass/fail the streamer branches on is `outputs.success`.
@@ -80,7 +89,8 @@ export const getCurrentTrackEffect: Effects.EffectType<Model, unknown, Outputs> 
           artistName: "",
           trackUri: "",
           requestedBy: "",
-          errorReason: toErrorReason(error),
+          errorReason: reason,
+          errorText: errorTextFor(reason),
         },
       };
     }
