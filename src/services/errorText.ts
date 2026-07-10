@@ -38,7 +38,12 @@ const TEMPLATES: Record<ErrorReason, string> = {
   unknown: "Something went wrong talking to Spotify.",
 };
 
-/** Renders `{name}` placeholders. An absent value leaves the placeholder's slot empty. */
+/**
+ * Renders `{name}` placeholders. A placeholder with no matching value is left in
+ * the output verbatim, rather than blanked: `errorTextFor` supplies every
+ * placeholder the templates use, so an unsubstituted `{foo}` reaching a viewer
+ * means a template named something nobody passes. Better that it be visible.
+ */
 function interpolate(template: string, values: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (whole, key: string) => values[key] ?? whole);
 }

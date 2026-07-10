@@ -121,7 +121,7 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
         description:
           "Why the request failed: not-found, not-playable, blocked-term, explicit, too-long, " +
           "recently-played, artist-recently-played, user-artist-recently-played, " +
-          "no-active-device, not-premium, not-linked.",
+          "no-active-device, not-premium, not-linked, unknown.",
         defaultName: "errorReason",
       },
       {

@@ -99,7 +99,7 @@ Wire the effects into your own command. A typical song-request command (`!sr`):
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `success`                               | `true` if the track passed moderation and was queued                                                              |
 | `trackUri` / `trackName` / `artistName` | The matched track (empty on failure)                                                                              |
-| `errorReason`                           | `not-found` · `blocked-term` · `explicit` · `too-long` · `recently-played` · `artist-recently-played` · `user-artist-recently-played` · `no-active-device` · `not-premium` · `not-linked` |
+| `errorReason`                           | `not-found` · `not-playable` · `blocked-term` · `explicit` · `too-long` · `recently-played` · `artist-recently-played` · `user-artist-recently-played` · `no-active-device` · `not-premium` · `not-linked` · `unknown` |
 | `errorText`                             | A friendly explanation of the failure, ready to send to chat (empty on success)                                   |
 | `errorCooldown`                         | Seconds until the reported cooldown expires. `0` when the failure wasn't a cooldown                               |
 
