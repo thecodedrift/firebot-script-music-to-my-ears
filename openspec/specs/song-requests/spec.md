@@ -263,15 +263,26 @@ logging beyond what it emits today. When it is on, the effect SHALL log, for eac
 issues, a record containing: the attempt kind (`filtered` or `raw`), the outgoing `q` value, the
 resolved request endpoint, Spotify's total match count and the number of items returned in the
 page, the full list of returned candidates, the raw response body, the candidate that was selected,
-and the validation verdict including the reason for any failure. These records SHALL be emitted at
-`info` level so that enabling the checkbox is sufficient to see them without also raising Firebot's
-global log level. Diagnostics SHALL NOT emit the bearer token, the refresh token, or the client
-secret.
+and the validation verdict including the reason for any failure. When the checkbox is on, the effect
+SHALL additionally log, for each request it rejects, a record naming the rejection's `errorReason`
+and the rejected track, plus the remaining wait when the reason is a cooldown. These records SHALL be
+emitted at `info` level so that enabling the checkbox is sufficient to see them without also raising
+Firebot's global log level. Diagnostics SHALL NOT emit the bearer token, the refresh token, or the
+client secret.
 
 #### Scenario: Logging disabled by default
 - **WHEN** a Request Song effect is newly created
 - **THEN** the "Enable Logging" checkbox is off
-- **AND** running the effect emits no search-diagnostic logging
+- **AND** running the effect emits no search-diagnostic or rejection logging
+
+#### Scenario: Logging a rejected request
+- **WHEN** the checkbox is on and a request is rejected by moderation or a restriction
+- **THEN** one record is logged at `info` naming the rejection's `errorReason` and the rejected track
+- **AND** when the reason is a cooldown, the record includes the remaining wait
+
+#### Scenario: Rejections silent when logging is off
+- **WHEN** the checkbox is off and a request is rejected
+- **THEN** no rejection record is logged
 
 #### Scenario: Logging a successful filtered search
 - **WHEN** the checkbox is on and a filtered search succeeds validation
