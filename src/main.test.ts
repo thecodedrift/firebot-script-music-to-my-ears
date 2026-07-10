@@ -19,7 +19,7 @@ function makeHarness() {
 }
 
 const runRequest = (modules: unknown) => ({
-  parameters: { spotifyClientId: "", spotifyClientSecret: "", noRepeatMinutes: 30 },
+  parameters: { spotifyClientId: "", spotifyClientSecret: "" },
   modules,
   trigger: { type: "startup_script", metadata: {} },
   firebot: {},
@@ -29,11 +29,9 @@ const runRequest = (modules: unknown) => ({
 describe("script lifecycle", () => {
   it("exposes the expected configuration parameters", () => {
     const params = script.getDefaultParameters();
-    expect(Object.keys(params).sort()).toEqual([
-      "noRepeatMinutes",
-      "spotifyClientId",
-      "spotifyClientSecret",
-    ]);
+    // The no-repeat window used to live here. It moved to each Request Song
+    // effect so it takes effect without a Firebot restart.
+    expect(Object.keys(params).sort()).toEqual(["spotifyClientId", "spotifyClientSecret"]);
   });
 
   it("registers five namespaced effects in run() and tears them all down in stop()", () => {

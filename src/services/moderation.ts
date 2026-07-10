@@ -20,3 +20,14 @@ export function findBlockedTerm(track: Track, blockedTerms: string[]): string | 
 export function isExplicitBlocked(track: Track, allowExplicit: boolean): boolean {
   return !allowExplicit && track.explicit;
 }
+
+/**
+ * True when the track runs longer than `maxSeconds`. A maximum of 0 (or less)
+ * disables the check, per Firebot's convention.
+ */
+export function isTooLong(track: Track, maxSeconds: number): boolean {
+  if (maxSeconds <= 0) {
+    return false;
+  }
+  return track.durationMs > maxSeconds * 1000;
+}

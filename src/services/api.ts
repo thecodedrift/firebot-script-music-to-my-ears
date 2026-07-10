@@ -162,6 +162,7 @@ function toTrack(item: SpotifyTrack): Track {
     name: item.name,
     artist: artists.join(", "),
     artists,
+    artistIds: item.artists.map((a) => a.id),
     explicit: item.explicit,
     durationMs: item.duration_ms,
   };
@@ -447,8 +448,11 @@ function logAttempt(
         candidates: attempt.items.map((item) => ({
           uri: item.uri,
           name: item.name,
-          artists: item.artists.map((a) => a.name),
+          // Ids as well as names: the artist cooldowns key on the id, so a
+          // surprise `artist-recently-played` is only debuggable with it.
+          artists: item.artists.map((a) => `${a.name} (${a.id})`),
           explicit: item.explicit,
+          durationMs: item.duration_ms,
           is_playable: item.is_playable,
         })),
         selected: attempt.selected?.uri,

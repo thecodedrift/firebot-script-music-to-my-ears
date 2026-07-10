@@ -102,7 +102,6 @@ export function initHarnessModules(env: HarnessEnv): void {
   initModules(modules, {
     spotifyClientId: env.clientId,
     spotifyClientSecret: env.clientSecret,
-    noRepeatMinutes: 0,
   });
 
   // Clear any cached expiry from a prior init in this process, so the seeded
