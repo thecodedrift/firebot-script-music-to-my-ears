@@ -204,8 +204,9 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
       </label>
       <p class="muted">
         When on, writes the Spotify search query, every candidate returned, the total number of
-        matches, and the raw response to the Firebot log. Verbose by design — turn it on to work
-        out why a request matched the wrong track, then turn it back off.
+        matches, and the raw response to the Firebot log — and logs each rejected request with the
+        reason it was turned away. Verbose by design — turn it on to work out why a request matched
+        the wrong track or was refused, then turn it back off.
       </p>
     </eos-container>
   `,
@@ -248,16 +249,36 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
     }
   },
   onTriggerEvent: async ({ effect, trigger }) => {
+    const log = Boolean(effect.enableLogging);
+
+    // Same gate as the search diagnostics: when logging is on, record why a
+    // request was turned away, so a streamer can see the rejection that follows
+    // the search rather than only the search. Emitted at `info` so the checkbox
+    // alone surfaces it, without raising Firebot's global log level.
+    const reject = (reason: ErrorReason, track?: Track, cooldown = 0) => {
+      if (log) {
+        logger.info(
+          `Song request rejected [${reason}]: ${JSON.stringify({
+            track: track?.name,
+            artist: track?.artists[0],
+            uri: track?.uri,
+            ...(cooldown ? { retryInSeconds: cooldown } : {}),
+          })}`
+        );
+      }
+      return failure(reason, track, cooldown);
+    };
+
     const query = (effect.query ?? "").trim();
     if (!query) {
-      return failure("not-found");
+      return reject("not-found");
     }
 
     let track: Track | undefined;
     try {
-      track = await searchTrack(query, { log: Boolean(effect.enableLogging) });
+      track = await searchTrack(query, { log });
       if (!track) {
-        return failure("not-found");
+        return reject("not-found");
       }
 
       // Permanent rejections first, first match wins: a track that is too long or
@@ -268,13 +289,13 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
         ? effect.blockedTerms
         : DEFAULT_BLOCKED_TERMS;
       if (findBlockedTerm(track, blockedTerms)) {
-        return failure("blocked-term", track);
+        return reject("blocked-term", track);
       }
       if (isExplicitBlocked(track, Boolean(effect.allowExplicit))) {
-        return failure("explicit", track);
+        return reject("explicit", track);
       }
       if (isTooLong(track, num(effect.maxTrackLengthSeconds, DEFAULT_MAX_TRACK_LENGTH_SECONDS))) {
-        return failure("too-long", track);
+        return reject("too-long", track);
       }
 
       // Then the transient cooldowns, resolved together: when several apply, the
@@ -290,7 +311,7 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
         ),
       });
       if (hit) {
-        return failure(hit.reason, track, cooldownSeconds(hit.remainingMs));
+        return reject(hit.reason, track, cooldownSeconds(hit.remainingMs));
       }
 
       await queueTrack(track.uri);

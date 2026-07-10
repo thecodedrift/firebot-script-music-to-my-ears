@@ -317,6 +317,46 @@ describe("failure outputs", () => {
   });
 });
 
+describe("rejection logging", () => {
+  const infoLog = () =>
+    (jest.requireMock("../../modules") as { logger: { info: jest.Mock } }).logger.info;
+
+  const rejectionLines = () =>
+    infoLog()
+      .mock.calls.map((c: unknown[]) => String(c[0]))
+      .filter((line: string) => line.startsWith("Song request rejected"));
+
+  it("logs a rejection with its reason when logging is on", async () => {
+    (searchTrack as jest.Mock).mockResolvedValue(track({ durationMs: 600_000 }));
+
+    await runEffect({ query: "long one", ...NO_LIMITS, maxTrackLengthSeconds: 420, enableLogging: true });
+
+    const lines = rejectionLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("[too-long]");
+    expect(lines[0]).toContain("Seven Dollars");
+  });
+
+  it("includes the retry wait when the rejection is a cooldown", async () => {
+    const effect = { query: "q", ...NO_LIMITS, artistCooldownMinutes: 60, enableLogging: true };
+    await runEffect(effect, "alice");
+    (searchTrack as jest.Mock).mockResolvedValue(track({ uri: "spotify:track:2" }));
+    await runEffect(effect, "bob");
+
+    const line = rejectionLines().find((l) => l.includes("[artist-recently-played]"));
+    expect(line).toBeDefined();
+    expect(line).toContain("retryInSeconds");
+  });
+
+  it("stays silent when logging is off", async () => {
+    (searchTrack as jest.Mock).mockResolvedValue(track({ durationMs: 600_000 }));
+
+    await runEffect({ query: "long one", ...NO_LIMITS, maxTrackLengthSeconds: 420 });
+
+    expect(rejectionLines()).toHaveLength(0);
+  });
+});
+
 describe("num", () => {
   it("accepts a number", () => {
     expect(num(60, 30)).toBe(60);
