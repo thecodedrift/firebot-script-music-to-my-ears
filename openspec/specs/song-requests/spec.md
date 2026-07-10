@@ -7,16 +7,18 @@ Defines the Request Song effect and the moderation, filtering, no-repeat, and re
 
 ### Requirement: Request Song Effect
 The script SHALL provide a single Request Song effect that, in one atomic invocation, searches
-Spotify for tracks only, applies moderation, and adds the matched track to the Spotify playback
-queue. It SHALL output a single `success` flag and, on failure, an `errorReason` identifying the
-stage that failed. The search stage MAY issue a normalized filtered search followed by a single raw
-fallback search; both are part of the one atomic invocation and neither is separately observable in
-the effect's outputs.
+Spotify for tracks only, applies moderation and the configured restrictions, and adds the matched
+track to the Spotify playback queue. It SHALL output a single `success` flag and, on failure, an
+`errorReason` identifying the stage that failed, an `errorText` describing that reason in prose, and
+an `errorCooldown` giving the remaining wait when the reason is a cooldown. The search stage MAY
+issue a normalized filtered search followed by a single raw fallback search; both are part of the one
+atomic invocation and neither is separately observable in the effect's outputs.
 
 #### Scenario: Successful request
-- **WHEN** the Request Song effect runs with a query that matches a track passing all moderation, and an active device is available
+- **WHEN** the Request Song effect runs with a query that matches a track passing all moderation and all restrictions, and an active device is available
 - **THEN** the track is added to the Spotify playback queue
 - **AND** the effect outputs `success: true` with `trackUri`, `trackName`, and `artistName` populated
+- **AND** `errorReason` and `errorText` are empty and `errorCooldown` is `0`
 
 #### Scenario: No result
 - **WHEN** the search returns no track
@@ -27,13 +29,14 @@ the effect's outputs.
 - **THEN** it is not returned, because search is limited to `type=track`
 
 #### Scenario: Single branch point for the streamer
-- **WHEN** the request fails at any stage (search, moderation, or queue)
+- **WHEN** the request fails at any stage (search, moderation, restrictions, or queue)
 - **THEN** the failure is reported through the one `success: false` output with a specific `errorReason`, so the streamer can branch (e.g. refund a redemption) with a single condition
+- **AND** a streamer who does not wish to branch per reason MAY send `errorText` directly
 
 #### Scenario: Fallback is invisible to downstream effects
 - **WHEN** a filtered search fails validation and the raw fallback produces the queued track
 - **THEN** the effect's outputs describe only the queued track, with no indication that two searches occurred
-- **AND** moderation, the no-repeat check, and the ledger write are applied to that track exactly once
+- **AND** moderation, the restriction checks, and the ledger write are applied to that track exactly once
 
 ### Requirement: Substring Moderation
 The Request Song effect SHALL reject a matched track when any configured blocked term appears, as a
@@ -64,13 +67,27 @@ When it is off, a matched track whose Spotify `explicit` field is true SHALL be 
 
 ### Requirement: No-Repeat Window
 The Request Song effect SHALL reject a matched track whose URI was queued within the configured
-no-repeat window. The no-repeat check and the ledger write SHALL occur within the same atomic
-effect invocation so the same track cannot pass the check twice before being recorded.
+no-repeat window. The window SHALL be configured **per effect** in minutes and SHALL default to `30`;
+a window of `0` disables the check. The no-repeat check and the ledger write SHALL occur within the
+same atomic effect invocation so the same track cannot pass the check twice before being recorded.
+
+The no-repeat window is a transient restriction and SHALL participate in the precedence rule defined
+by the Rejection Precedence requirement: when a longer cooldown also applies, that longer cooldown is
+the one reported.
 
 #### Scenario: Recently queued
 - **WHEN** a matched track's URI was recorded in the ledger within the no-repeat window
 - **THEN** the effect outputs `success: false` and `errorReason: recently-played`
 - **AND** the track is not queued again
+
+#### Scenario: Configured per effect
+- **WHEN** two Request Song effects are configured with different no-repeat windows
+- **THEN** each applies its own window when reading the ledger
+- **AND** both record every successfully queued track, so neither effect's window is undermined by the other
+
+#### Scenario: Window of 0 disables the check
+- **WHEN** the no-repeat window is `0`
+- **THEN** no track is rejected with `errorReason: recently-played`
 
 ### Requirement: Queue Failure Reporting
 When moderation passes but the track cannot be queued, the Request Song effect SHALL report the
@@ -82,18 +99,44 @@ failure without recording the track in the ledger.
 - **AND** nothing is written to the ledger
 
 ### Requirement: Requester Ledger
-The script SHALL maintain an in-memory ledger mapping a track URI to its requester and the time it
-was queued, used for the no-repeat check and for requester attribution. The ledger SHALL be written
-only on a successful queue, SHALL NOT be persisted across restarts, and SHALL be cleared on
+The script SHALL maintain an in-memory ledger of namespaced keys mapped to the requester and the time
+the entry was written, used for the no-repeat check, the artist cooldowns, and requester attribution.
+The keyspace SHALL distinguish tracks (`track:<uri>`), artists (`artist:<artistId>`), and
+requester-artist pairs (`user-artist:<lowercased-username>:<artistId>`). Requester attribution SHALL
+be read only from `track:` keys.
+
+On a successful queue the ledger SHALL record every applicable key **unconditionally**, including keys
+whose corresponding window is `0` on the effect that queued the track. Only reads are gated by the
+window. The ledger SHALL NOT be persisted across restarts and SHALL be cleared in its entirety on
 `stop()`.
+
+The ledger SHALL expose the remaining wait for a key in milliseconds rather than a boolean, returning
+`0` when the key is absent, its window has elapsed, or the window is `0` or less.
 
 #### Scenario: Recorded on successful queue
 - **WHEN** the Request Song effect successfully queues a track
-- **THEN** the track's URI, requester (from the effect trigger), and a timestamp are recorded in the ledger
+- **THEN** the track key, the primary artist key, and the requester-artist key are each recorded with the requester and a timestamp
+
+#### Scenario: Recorded even when a window is disabled
+- **WHEN** an effect with its artist cooldown set to `0` successfully queues a track
+- **THEN** the artist key is still recorded
+- **AND** a different effect with a non-zero artist cooldown observes that entry
+
+#### Scenario: Requester attribution reads only track keys
+- **WHEN** requester attribution is resolved for a currently-playing track
+- **THEN** it is read from the `track:` key for that URI
+
+#### Scenario: Remaining wait rather than a boolean
+- **WHEN** a key was recorded 2 minutes ago and its window is 5 minutes
+- **THEN** the ledger reports approximately 3 minutes of remaining wait
+
+#### Scenario: No remaining wait when the window is disabled
+- **WHEN** a key was recorded and its window is `0`
+- **THEN** the ledger reports `0` remaining wait
 
 #### Scenario: Cleared on teardown
 - **WHEN** the script stops
-- **THEN** the ledger is cleared
+- **THEN** every key in the ledger is cleared
 
 ### Requirement: Search Query Normalization
 The Request Song effect SHALL attempt to normalize a free-text query into Spotify field filters
@@ -247,3 +290,193 @@ secret.
 #### Scenario: Credentials never logged
 - **WHEN** the checkbox is on
 - **THEN** no logged record contains the bearer token, the refresh token, or the Spotify client secret
+
+### Requirement: Global Artist Cooldown
+The Request Song effect SHALL reject a matched track whose primary artist was queued within the
+configured global artist cooldown window, regardless of who requested it. The primary artist SHALL
+be the first artist of the track, identified by Spotify artist id. The window SHALL be configured
+per effect in minutes and SHALL default to `0`, which disables the check.
+
+This requirement exists to protect playlist diversity, not to police requesters. A viewer who has
+requested nothing can be rejected because another viewer queued that artist, and that is correct
+behavior.
+
+#### Scenario: Artist queued within the window
+- **WHEN** a matched track's primary artist id was recorded in the ledger within the global artist cooldown window
+- **THEN** the effect outputs `success: false` and `errorReason: artist-recently-played`
+- **AND** the track is not queued
+
+#### Scenario: The cooldown applies to every requester
+- **WHEN** one viewer successfully queues a track by an artist, and a different viewer requests another track by the same primary artist within the window
+- **THEN** the second request is rejected with `errorReason: artist-recently-played`
+
+#### Scenario: Rejection text does not blame the requester
+- **WHEN** a request is rejected with `errorReason: artist-recently-played`
+- **THEN** the `errorText` output states that the artist was played recently
+- **AND** it does not state or imply that the requester has requested that artist too often
+
+#### Scenario: Window of 0 disables the check
+- **WHEN** the global artist cooldown is `0`
+- **THEN** no track is rejected with `errorReason: artist-recently-played`
+
+#### Scenario: A featured artist does not trip their own cooldown
+- **WHEN** an artist is queued as the primary artist of one track, and is then requested as a non-primary featured artist of a different track within the window
+- **THEN** the second request is not rejected on the basis of the artist cooldown, because only the primary artist is gated
+- **AND** this bypass is accepted deliberately: gating every credited artist would lock the solo work of a collaborator nobody requested, which is a worse and more confusing failure than the bypass
+
+### Requirement: Per-Requester Artist Cooldown
+The Request Song effect SHALL reject a matched track whose primary artist was queued by the same
+requester within the configured per-requester artist cooldown window. The key SHALL be the
+requester's lowercased username together with the primary artist's Spotify artist id. The window
+SHALL be configured per effect in minutes and SHALL default to `0`, which disables the check.
+
+When the effect trigger carries no username, the per-requester check SHALL be skipped entirely.
+
+#### Scenario: Same requester, same artist
+- **WHEN** a requester successfully queues a track, and requests another track by the same primary artist within the per-requester window
+- **THEN** the effect outputs `success: false` and `errorReason: user-artist-recently-played`
+- **AND** the track is not queued
+
+#### Scenario: A different requester is unaffected
+- **WHEN** one requester queues a track by an artist, and a different requester requests that artist within the per-requester window
+- **THEN** the per-requester check does not reject the second request
+- **AND** the request may still be rejected by the global artist cooldown, if that window is configured and has not elapsed
+
+#### Scenario: Usernames are compared case-insensitively
+- **WHEN** the same viewer's username is supplied with different casing across two requests
+- **THEN** both requests resolve to the same per-requester cooldown key
+
+#### Scenario: A trigger without a username skips the check
+- **WHEN** the Request Song effect is fired by a trigger that supplies no username, such as a timer
+- **THEN** the per-requester artist cooldown is not evaluated
+- **AND** such requests do not share a common cooldown bucket with one another
+
+#### Scenario: Window of 0 disables the check
+- **WHEN** the per-requester artist cooldown is `0`
+- **THEN** no track is rejected with `errorReason: user-artist-recently-played`
+
+### Requirement: Maximum Track Length
+The Request Song effect SHALL reject a matched track whose duration exceeds the configured maximum
+track length. The maximum SHALL be configured per effect in seconds and SHALL default to `0`, which
+disables the check.
+
+#### Scenario: Track exceeds the maximum
+- **WHEN** the maximum track length is 420 seconds and a matched track is 600 seconds long
+- **THEN** the effect outputs `success: false` and `errorReason: too-long`
+- **AND** the track is not queued
+
+#### Scenario: Track within the maximum
+- **WHEN** the maximum track length is 420 seconds and a matched track is 419 seconds long
+- **THEN** the track is not rejected on the basis of its length
+
+#### Scenario: Maximum of 0 disables the check
+- **WHEN** the maximum track length is `0`
+- **THEN** no track is rejected with `errorReason: too-long`
+
+### Requirement: Rejection Precedence
+When a matched track trips more than one restriction, the Request Song effect SHALL report exactly
+one `errorReason`, chosen by the following two-part rule.
+
+Restrictions SHALL be partitioned into **permanent** rejections — `blocked-term`, `explicit`, and
+`too-long` — and **transient** rejections — `recently-played`, `artist-recently-played`, and
+`user-artist-recently-played`.
+
+Permanent rejections SHALL be evaluated first, and the first one that trips SHALL be reported,
+because a track that is too long or explicit will never succeed and telling the requester to retry
+later would be false.
+
+When no permanent rejection trips and two or more transient rejections trip, the effect SHALL report
+the one with the **greatest remaining wait**, not the most specific one. Reporting a shorter
+remaining wait while a longer cooldown is still in force would tell the requester to retry at a time
+they would be rejected again.
+
+#### Scenario: A permanent rejection outranks a transient one
+- **WHEN** a matched track is both longer than the maximum track length and within the no-repeat window
+- **THEN** the effect outputs `errorReason: too-long`
+
+#### Scenario: The longest remaining cooldown is reported
+- **WHEN** a matched track trips the no-repeat window with 5 minutes remaining, the per-requester artist cooldown with 22 minutes remaining, and the global artist cooldown with 58 minutes remaining
+- **THEN** the effect outputs `errorReason: artist-recently-played`
+- **AND** `errorCooldown` reports the remaining wait for that cooldown, not for either shorter one
+
+#### Scenario: Specificity does not decide the winner
+- **WHEN** a matched track trips the no-repeat window with 5 minutes remaining and the global artist cooldown with 58 minutes remaining
+- **THEN** the effect outputs `errorReason: artist-recently-played`, even though `recently-played` identifies the more specific cause
+- **AND** the requester is told to retry after the cooldown that actually governs
+
+#### Scenario: A disabled restriction never wins
+- **WHEN** a restriction's window is `0`
+- **THEN** it contributes no remaining wait and cannot be reported
+
+### Requirement: Friendly Error Text
+Every effect that outputs an `errorReason` SHALL also output an `errorText`: a human-readable
+message describing the failure, suitable for sending to chat without modification. `errorText` SHALL
+be derived from the `errorReason` by a single mapping that covers every reason exhaustively, and
+SHALL be the empty string when the effect succeeds.
+
+Where a message includes the track name, artist name, or a remaining wait, those values SHALL be
+substituted using placeholders that are not prefixed with `$`, because artist names legitimately
+contain `$` and Firebot's replacement-variable syntax uses that character.
+
+#### Scenario: Text accompanies every failure
+- **WHEN** any effect outputs a non-empty `errorReason`
+- **THEN** it also outputs a non-empty `errorText` describing that reason
+
+#### Scenario: Empty on success
+- **WHEN** an effect succeeds
+- **THEN** `errorText` is the empty string, matching `errorReason`
+
+#### Scenario: Playback effects carry the text too
+- **WHEN** a skip, play/resume, or pause effect fails with `no-active-device`, `not-premium`, or `not-linked`
+- **THEN** it outputs the corresponding `errorText`
+
+#### Scenario: An artist name containing a dollar sign renders intact
+- **WHEN** a request by an artist named `A$AP Rocky` is rejected by a cooldown
+- **THEN** the artist name appears intact in `errorText`, with no part of it interpreted as a variable
+
+### Requirement: Remaining Cooldown Output
+The Request Song effect SHALL output an `errorCooldown`: the remaining wait, in whole seconds,
+before the reported cooldown expires. The value SHALL be computed by rounding the remaining
+milliseconds **up** to the next second, and SHALL be `0` for every reason that is not a cooldown, and
+on success.
+
+Because a cooldown rejection always has a remaining wait greater than zero, rounding up guarantees
+`errorCooldown` is at least `1` whenever a cooldown is reported. A value of `0` therefore
+unambiguously means "not rejected by a cooldown".
+
+#### Scenario: Reports the winning cooldown's remaining wait
+- **WHEN** the effect reports a transient `errorReason`
+- **THEN** `errorCooldown` is the remaining seconds of that same cooldown
+
+#### Scenario: Rounded up, never to zero
+- **WHEN** a cooldown has 400 milliseconds remaining
+- **THEN** `errorCooldown` is `1`, not `0`
+
+#### Scenario: Zero for non-cooldown failures
+- **WHEN** the effect fails with `not-found`, `blocked-term`, `explicit`, `too-long`, `no-active-device`, `not-premium`, `not-linked`, or `unknown`
+- **THEN** `errorCooldown` is `0`
+
+#### Scenario: Zero on success
+- **WHEN** the effect queues a track successfully
+- **THEN** `errorCooldown` is `0`
+
+### Requirement: Restricted Options Grouping
+The Request Song effect options SHALL present content filters and request restrictions as two
+distinct sections. A `Moderation` section SHALL contain the allow-explicit checkbox and the blocked
+terms list. A `Restrictions` section SHALL contain the no-repeat window, the global artist cooldown,
+the per-requester artist cooldown, and the maximum track length. The `Troubleshooting` section SHALL
+remain last.
+
+The `Moderation` filters SHALL remain post-search gates applied to the single selected candidate;
+grouping them under that heading SHALL NOT be taken to mean they are applied to the search query, nor
+that a rejected candidate causes the effect to try the next search result.
+
+#### Scenario: Sections presented
+- **WHEN** a streamer opens the Request Song effect options
+- **THEN** the moderation filters and the request restrictions appear under separate headings
+- **AND** the troubleshooting section appears last
+
+#### Scenario: Moderation does not skip to the next candidate
+- **WHEN** the selected candidate is rejected by a blocked term or the explicit filter
+- **THEN** the effect fails with that reason
+- **AND** it does not search again or evaluate another candidate
