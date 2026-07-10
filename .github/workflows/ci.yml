@@ -40,3 +40,14 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      # Uploaded after the tests so an artifact only ever exists for a green
+      # build. Firebot loads a single .js, but upload-artifact always zips, so
+      # testers download the zip and unpack the one file inside it.
+      - name: Upload preview build
+        uses: actions/upload-artifact@v4
+        with:
+          name: musicToMyEars-${{ github.event_name == 'pull_request' && format('pr{0}', github.event.pull_request.number) || github.ref_name }}-${{ github.sha }}
+          path: dist/musicToMyEars.js
+          retention-days: 14
+          if-no-files-found: error
