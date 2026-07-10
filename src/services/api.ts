@@ -435,33 +435,32 @@ function logAttempt(
   if (!options.log) {
     return;
   }
+  // Compact single-line JSON on purpose: a pretty-printed record spans dozens of
+  // lines per search and drowns the Firebot log. Parse it out of the line if you
+  // need to read it (the tests do).
   logger.info(
-    `Song request search [${kind}]: ${JSON.stringify(
-      {
-        attempt: kind,
-        query: q,
-        endpoint: attempt.endpoint,
-        // `totalMatches` is how many tracks Spotify found; `returnedItems` is
-        // just this page. Only the former answers "how many possible matches".
-        totalMatches: attempt.data?.tracks?.total,
-        returnedItems: attempt.items.length,
-        candidates: attempt.items.map((item) => ({
-          uri: item.uri,
-          name: item.name,
-          // Ids as well as names: the artist cooldowns key on the id, so a
-          // surprise `artist-recently-played` is only debuggable with it.
-          artists: item.artists.map((a) => `${a.name} (${a.id})`),
-          explicit: item.explicit,
-          durationMs: item.duration_ms,
-          is_playable: item.is_playable,
-        })),
-        selected: attempt.selected?.uri,
-        validation: verdict ?? "n/a (raw query is accepted without validation)",
-        rawResponse: attempt.data,
-      },
-      undefined,
-      2
-    )}`
+    `Song request search [${kind}]: ${JSON.stringify({
+      attempt: kind,
+      query: q,
+      endpoint: attempt.endpoint,
+      // `totalMatches` is how many tracks Spotify found; `returnedItems` is
+      // just this page. Only the former answers "how many possible matches".
+      totalMatches: attempt.data?.tracks?.total,
+      returnedItems: attempt.items.length,
+      candidates: attempt.items.map((item) => ({
+        uri: item.uri,
+        name: item.name,
+        // Ids as well as names: the artist cooldowns key on the id, so a
+        // surprise `artist-recently-played` is only debuggable with it.
+        artists: item.artists.map((a) => `${a.name} (${a.id})`),
+        explicit: item.explicit,
+        durationMs: item.duration_ms,
+        is_playable: item.is_playable,
+      })),
+      selected: attempt.selected?.uri,
+      validation: verdict ?? "n/a (raw query is accepted without validation)",
+      rawResponse: attempt.data,
+    })}`
   );
 }
 
