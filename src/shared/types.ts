@@ -17,18 +17,6 @@ export type ErrorReason =
   | "not-linked"
   | "unknown";
 
-/**
- * Reasons that clear on their own once a cooldown elapses, as opposed to the
- * permanent ones (a track that is too long stays too long). Only these carry a
- * non-zero `errorCooldown`, and only these compete on remaining wait — see
- * `resolveCooldown` in `services/restrictions.ts`.
- */
-export const TRANSIENT_REASONS = [
-  "recently-played",
-  "artist-recently-played",
-  "user-artist-recently-played",
-] as const satisfies readonly ErrorReason[];
-
 /** Normalized track shape used across services and effects. */
 export interface Track {
   uri: string;
