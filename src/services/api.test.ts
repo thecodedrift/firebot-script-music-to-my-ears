@@ -502,5 +502,14 @@ describe("searchTrack", () => {
       expect(logged).not.toContain("secret-token-value");
       expect(logged).not.toContain("Authorization");
     });
+
+    it("emits the diagnostic on a single line", async () => {
+      // Pretty-printed JSON drowns the Firebot log in newlines; keep it compact.
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack(), makeTrack()], 2)));
+
+      await searchTrack("seven dollars by happy birthday mr baskets", { log: true });
+
+      expect(String(logger.info.mock.calls[0][0])).not.toContain("\n");
+    });
   });
 });
