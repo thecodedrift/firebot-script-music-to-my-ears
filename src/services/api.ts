@@ -238,10 +238,16 @@ export function parseTrackId(input: string): string | undefined {
 export async function getTrack(id: string): Promise<Track | undefined> {
   let data: SpotifyTrack | undefined;
   try {
-    const region = market();
     // The `market` populates `is_playable`, so the guard below can reject a track
-    // the configured country cannot play. A 2-letter code needs no encoding.
-    const endpoint = region ? `/tracks/${id}?market=${region}` : `/tracks/${id}`;
+    // the configured country cannot play. Built with URLSearchParams to match the
+    // rest of this file (runSearch, queueTrack) rather than string interpolation.
+    const region = market();
+    const params = new URLSearchParams();
+    if (region) {
+      params.set("market", region);
+    }
+    const query = params.toString();
+    const endpoint = query ? `/tracks/${id}?${query}` : `/tracks/${id}`;
     ({ data } = await spotifyFetch<SpotifyTrack>(endpoint));
   } catch (error) {
     if (error instanceof SpotifyApiError && (error.status === 404 || error.status === 400)) {
@@ -437,8 +443,10 @@ export function overlapScore(item: SpotifyTrack, queryTokens: Set<string>): numb
  * Spotify's order as the tie-break. Returns undefined when there are no items.
  *
  * The returned candidate may still score zero (nothing overlapped); callers that
- * need a relevance floor check the score themselves. `is_playable` is not
- * consulted — see the note on SEARCH_LIMIT.
+ * need a relevance floor check the score themselves. Candidates Spotify marks
+ * unplayable (`is_playable === false`) are skipped before ranking; that field is
+ * only populated when a market is set, so with none it excludes nothing (see the
+ * note on SEARCH_LIMIT).
  */
 export function selectBest(
   items: SpotifyTrack[],
