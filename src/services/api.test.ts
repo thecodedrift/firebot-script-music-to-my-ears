@@ -1,4 +1,5 @@
 import {
+  market,
   normalizeQuery,
   NotPlayableError,
   overlapScore,
@@ -376,10 +377,34 @@ describe("selectBest", () => {
   });
 });
 
+describe("market", () => {
+  const { getParams } = jest.requireMock("../modules") as { getParams: jest.Mock };
+
+  it("returns an uppercased 2-letter code, trimmed", () => {
+    getParams.mockReturnValue({ spotifyCountryCode: "us" });
+    expect(market()).toBe("US");
+    getParams.mockReturnValue({ spotifyCountryCode: " Gb " });
+    expect(market()).toBe("GB");
+  });
+
+  it("returns undefined for an empty or malformed code", () => {
+    for (const code of ["", "USA", "1", "u", "u2", "us1", "  "]) {
+      getParams.mockReturnValue({ spotifyCountryCode: code });
+      expect(market()).toBeUndefined();
+    }
+  });
+
+  it("tolerates a missing code", () => {
+    getParams.mockReturnValue({});
+    expect(market()).toBeUndefined();
+  });
+});
+
 describe("searchTrack", () => {
   const mockFetch = jest.fn();
-  const { logger } = jest.requireMock("../modules") as {
+  const { logger, getParams } = jest.requireMock("../modules") as {
     logger: { debug: jest.Mock; info: jest.Mock };
+    getParams: jest.Mock;
   };
 
   function searchBody(items: SpotifyTrack[], total = items.length) {
@@ -407,6 +432,8 @@ describe("searchTrack", () => {
     jest.clearAllMocks();
     global.fetch = mockFetch as unknown as typeof fetch;
     (getAccessToken as jest.Mock).mockResolvedValue("secret-token-value");
+    // Default to no market; the Country-of-Play block overrides per test.
+    getParams.mockReturnValue({ spotifyCountryCode: "" });
   });
 
   it("issues one filtered search and accepts a validated result", async () => {
@@ -527,6 +554,82 @@ describe("searchTrack", () => {
     expect(String(mockFetch.mock.calls[0][0])).toContain(`/tracks/${id}`);
     expect(logger.info).not.toHaveBeenCalled();
     expect(track?.name).toBe("Seven Dollars");
+  });
+
+  describe("Country of Play market", () => {
+    /** The decoded `market` sent on the nth fetch call. */
+    function sentMarket(call: number): string | null {
+      const url = new URL(String(mockFetch.mock.calls[call][0]));
+      return url.searchParams.get("market");
+    }
+
+    it("sends the market on search when a code is configured", async () => {
+      getParams.mockReturnValue({ spotifyCountryCode: "us" });
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack()])));
+
+      await searchTrack("seven dollars by happy birthday mr baskets");
+
+      expect(sentMarket(0)).toBe("US");
+    });
+
+    it("sends no market when the code is empty", async () => {
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack()])));
+
+      await searchTrack("seven dollars by happy birthday mr baskets");
+
+      expect(sentMarket(0)).toBeNull();
+    });
+
+    it("sends no market for an invalid code", async () => {
+      getParams.mockReturnValue({ spotifyCountryCode: "USA" });
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack()])));
+
+      await searchTrack("seven dollars by happy birthday mr baskets");
+
+      expect(sentMarket(0)).toBeNull();
+    });
+
+    it("sends the market on a direct lookup and rejects an unplayable track", async () => {
+      getParams.mockReturnValue({ spotifyCountryCode: "us" });
+      mockFetch.mockResolvedValueOnce(
+        okResponse(makeTrack({ is_playable: false, restrictions: { reason: "market" } }))
+      );
+
+      await expect(searchTrack("spotify:track:1O9XsjLUaxsYCRh9vyF8xS")).rejects.toBeInstanceOf(
+        NotPlayableError
+      );
+      expect(String(mockFetch.mock.calls[0][0])).toContain("market=US");
+    });
+
+    it("excludes an unplayable candidate from ranking", async () => {
+      getParams.mockReturnValue({ spotifyCountryCode: "us" });
+      const unplayable = makeTrack({
+        uri: "spotify:track:ffffffffffffffffffffff",
+        is_playable: false,
+      });
+      const playable = makeTrack({
+        uri: "spotify:track:gggggggggggggggggggggg",
+        is_playable: true,
+      });
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([unplayable, playable])));
+
+      const track = await searchTrack("seven dollars by happy birthday mr baskets");
+
+      expect(track?.uri).toBe("spotify:track:gggggggggggggggggggggg");
+    });
+
+    it("resolves to not-found when every candidate is unplayable", async () => {
+      getParams.mockReturnValue({ spotifyCountryCode: "us" });
+      const unplayable = makeTrack({ is_playable: false });
+      mockFetch
+        .mockResolvedValueOnce(okResponse(searchBody([unplayable])))
+        .mockResolvedValueOnce(okResponse(searchBody([unplayable])));
+
+      await expect(
+        searchTrack("seven dollars by happy birthday mr baskets")
+      ).resolves.toBeUndefined();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("opt-in diagnostics", () => {

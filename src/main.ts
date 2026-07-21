@@ -40,6 +40,16 @@ const script: Firebot.CustomScript<Params> = {
       description: "The client secret for the same Spotify app.",
       default: "",
     },
+    spotifyCountryCode: {
+      type: "string",
+      title: "Country of Play",
+      description:
+        "Optional 2-letter country code (ISO 3166-1 alpha-2, e.g. US, GB, DE) used as the " +
+        "Spotify market. When set, requests resolve against that country's catalog and " +
+        "region-locked tracks are rejected instead of queued. Leave blank to use your linked " +
+        "account's country automatically.",
+      default: "",
+    },
   }),
 
   run: (runRequest) => {
