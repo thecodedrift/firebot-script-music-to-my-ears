@@ -525,10 +525,15 @@ export async function searchTrack(
   const normalized = normalizeQuery(query);
 
   if (normalized.kind === "filtered") {
-    // Rank filtered candidates against the parsed title+artist tokens. Any
-    // candidate that then passes validateMatch already contains all of them, so
-    // this is behavior-preserving when the top result validates; it only helps
-    // when a lower-ranked candidate is the one that validates.
+    // Rank filtered candidates against the parsed title+artist tokens, then
+    // validate the pick. Behavior-preserving when the top result validates, and
+    // it can surface a lower-ranked validating candidate instead of falling
+    // straight through — but only best-effort: the score uses a merged
+    // name+artist haystack, while validateMatch checks the two fields
+    // separately, so a non-validating candidate can tie at the max score and, if
+    // Spotify sorts it first, be picked and then rejected, falling through as
+    // before. validateMatch gates every filtered result, so no wrong track is
+    // queued either way.
     const tokens = new Set<string>([
       ...tokenize(normalized.title),
       ...tokenize(normalized.artist),
