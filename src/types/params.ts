@@ -11,6 +11,12 @@ export interface Params {
   spotifyClientId: string;
   /** Spotify application client secret. */
   spotifyClientSecret: string;
+  /**
+   * Optional "Country of Play": a 2-letter ISO 3166-1 alpha-2 code sent as the
+   * Spotify `market`. Empty (the default) sends no market. See `market()` in
+   * `services/api.ts` for how it is validated and applied.
+   */
+  spotifyCountryCode: string;
 }
 
 /**

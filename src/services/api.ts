@@ -1,4 +1,4 @@
-import { logger } from "../modules";
+import { getParams, logger } from "../modules";
 import { SPOTIFY_API_BASE } from "../shared/constants";
 import { ErrorReason, Track } from "../shared/types";
 import {
@@ -169,17 +169,32 @@ function toTrack(item: SpotifyTrack): Track {
 }
 
 /**
- * We intentionally send no `market` parameter. Spotify deprecated the
- * `market=from_token` value (Nov 2024) and now rejects it with a 400 on some
- * endpoints/accounts. Per the current docs, when a valid user access token is
- * present the account's own country takes priority automatically, so omitting
- * `market` gives the correct per-account catalog without the deprecated value.
+ * The `market` parameter is the streamer's optional "Country of Play" code (see
+ * `Params.spotifyCountryCode` and `market()` below). When it is set we send it on
+ * search and track lookup; when it is empty we send none.
  *
- * What it does NOT give us is `is_playable`: that field only appears when Spotify
- * applies track relinking, which requires an explicit `market`. So search results
- * carry no playability signal at all — see `SEARCH_LIMIT` and `runSearch` below.
+ * We never send the deprecated `market=from_token` value — Spotify removed it in
+ * Nov 2024 and now 400s on some accounts. With no code set and a valid user
+ * token, the account's own country applies automatically, giving the correct
+ * per-account catalog — but WITHOUT `is_playable`: that field only appears when
+ * Spotify applies track relinking, which requires an explicit `market`. So a set
+ * code is also what turns on the playability signal that `selectBest` filters on.
  * See https://developer.spotify.com/documentation/web-api/reference/search
  */
+
+/** A 2-letter ISO 3166-1 alpha-2 country code. */
+const COUNTRY_CODE_RE = /^[A-Za-z]{2}$/;
+
+/**
+ * The configured Spotify `market`, or undefined when none is set. Reads the
+ * "Country of Play" parameter, accepts it only when it is exactly two ASCII
+ * letters, and uppercases it. A malformed value is treated as unset rather than
+ * forwarded to Spotify (a bad `market` can 400 or distort results).
+ */
+export function market(): string | undefined {
+  const raw = (getParams().spotifyCountryCode ?? "").trim();
+  return COUNTRY_CODE_RE.test(raw) ? raw.toUpperCase() : undefined;
+}
 
 /**
  * How many search results to fetch and rank.
@@ -189,11 +204,9 @@ function toTrack(item: SpotifyTrack): Track {
  * only the first. Five is enough: the intended track reliably lands in the top
  * few, and fetching more does not improve the pick.
  *
- * Ranking does NOT consult `is_playable`: that field is only returned when
- * Spotify applies track relinking, which requires a `market` parameter, and we
- * send none (see above). Filtering unplayable candidates is deferred to the
- * Country-of-Play change, which adds a `market` and pre-filters this list before
- * ranking.
+ * When a "Country of Play" market is set, `selectBest` first drops candidates
+ * Spotify marks unplayable, then ranks the rest; without a market `is_playable`
+ * is absent and nothing is dropped (see the note above `market()`).
  */
 const SEARCH_LIMIT = 5;
 
@@ -225,7 +238,11 @@ export function parseTrackId(input: string): string | undefined {
 export async function getTrack(id: string): Promise<Track | undefined> {
   let data: SpotifyTrack | undefined;
   try {
-    ({ data } = await spotifyFetch<SpotifyTrack>(`/tracks/${id}`));
+    const region = market();
+    // The `market` populates `is_playable`, so the guard below can reject a track
+    // the configured country cannot play. A 2-letter code needs no encoding.
+    const endpoint = region ? `/tracks/${id}?market=${region}` : `/tracks/${id}`;
+    ({ data } = await spotifyFetch<SpotifyTrack>(endpoint));
   } catch (error) {
     if (error instanceof SpotifyApiError && (error.status === 404 || error.status === 400)) {
       return undefined;
@@ -430,6 +447,11 @@ export function selectBest(
   let best: SpotifyTrack | undefined;
   let bestScore = -1;
   for (const item of items) {
+    // Skip tracks Spotify marks unplayable in the configured market. With no
+    // market set, `is_playable` is absent and this never excludes anything.
+    if (item.is_playable === false) {
+      continue;
+    }
     const score = overlapScore(item, queryTokens);
     // Strict `>` preserves Spotify's order on ties: the first item to reach a
     // score keeps it, so an equal-scoring later candidate never displaces it.
@@ -444,6 +466,10 @@ export function selectBest(
 /** Issues one `/search` call and picks the best-overlap candidate. */
 async function runSearch(q: string, queryTokens: Set<string>): Promise<SearchAttempt> {
   const params = new URLSearchParams({ q, type: "track", limit: String(SEARCH_LIMIT) });
+  const region = market();
+  if (region) {
+    params.set("market", region);
+  }
   const endpoint = `/search?${params.toString()}`;
   const { data } = await spotifyFetch<SpotifySearchResponse>(endpoint);
   const items = data?.tracks?.items ?? [];

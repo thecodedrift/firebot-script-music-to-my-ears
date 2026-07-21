@@ -102,6 +102,8 @@ export function initHarnessModules(env: HarnessEnv): void {
   initModules(modules, {
     spotifyClientId: env.clientId,
     spotifyClientSecret: env.clientSecret,
+    // Optional market for live runs; empty by default so behavior is unchanged.
+    spotifyCountryCode: process.env.SPOTIFY_COUNTRY_CODE ?? "",
   });
 
   // Clear any cached expiry from a prior init in this process, so the seeded

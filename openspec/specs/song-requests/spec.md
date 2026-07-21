@@ -227,8 +227,13 @@ with the greatest **token overlap** with the query it issued: the number of dist
 (normalized as above) that appear in the union of the candidate's track-name tokens and its
 artists'-name tokens. Ties SHALL be broken by Spotify's original result order, so the earliest of
 the equally-scoring candidates is chosen. On the filtered path the query tokens are the parsed
-title and artist tokens; on the raw path they are the tokens of the raw free-text query. Selection
-SHALL NOT depend on `is_playable`, which is absent while no `market` parameter is sent.
+title and artist tokens; on the raw path they are the tokens of the raw free-text query.
+
+Selection SHALL exclude candidates Spotify marks unplayable (`is_playable === false`) before
+ranking. `is_playable` is only populated when a `market` is in effect (see the Configuration
+Parameters requirement); when none is set the field is absent, nothing is excluded, and selection is
+unchanged. When every returned candidate is excluded as unplayable, the search SHALL resolve as
+though it returned nothing — the filtered path falls through and the raw path outputs `not-found`.
 
 The raw fallback SHALL apply a **zero-overlap floor**: when the best-overlap candidate shares no
 query token — including when the raw search returns no candidates at all — the effect SHALL treat
@@ -271,6 +276,14 @@ validation; only the floor gates it.
 #### Scenario: Ties keep Spotify order
 - **WHEN** two raw candidates have equal token overlap with the query
 - **THEN** the effect selects the one Spotify returned first
+
+#### Scenario: Unplayable candidates are excluded when a market is in effect
+- **WHEN** a Country of Play code is set and the highest-overlap candidate is marked `is_playable: false` while a lower-overlap candidate is playable
+- **THEN** the effect selects the playable candidate, skipping the unplayable one
+
+#### Scenario: All candidates unplayable resolves to not-found
+- **WHEN** a Country of Play code is set and every returned candidate is marked `is_playable: false`
+- **THEN** the raw path selects none of them and outputs `success: false` and `errorReason: not-found`
 
 #### Scenario: Fallback also finds nothing
 - **WHEN** the filtered search fails validation and the raw fallback search returns no track
