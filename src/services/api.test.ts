@@ -1,9 +1,11 @@
 import {
   normalizeQuery,
   NotPlayableError,
+  overlapScore,
   parseTrackId,
   redactEndpoint,
   searchTrack,
+  selectBest,
   spotifyFetch,
   SpotifyApiError,
   toErrorReason,
@@ -329,6 +331,51 @@ describe("validateMatch", () => {
   });
 });
 
+describe("overlapScore", () => {
+  it("counts distinct query tokens present in the track name or artists", () => {
+    const track = makeTrack({
+      name: "Come Play",
+      artists: [{ id: "artist-stray-kids", name: "Stray Kids" }],
+    });
+    // `come` and `play` hit the name; `advance` is absent.
+    expect(overlapScore(track, tokenize("come play advance"))).toBe(2);
+    // An artist token counts too.
+    expect(overlapScore(track, tokenize("stray"))).toBe(1);
+  });
+
+  it("is zero when nothing overlaps", () => {
+    const track = makeTrack({ name: "Tippy Toes", artists: [{ id: "artist-xg", name: "XG" }] });
+    expect(overlapScore(track, tokenize("come play advance"))).toBe(0);
+  });
+});
+
+describe("selectBest", () => {
+  const tippy = makeTrack({ name: "Tippy Toes", artists: [{ id: "artist-xg", name: "XG" }] });
+  const comePlay = makeTrack({
+    uri: "spotify:track:eeeeeeeeeeeeeeeeeeeeee",
+    name: "Come Play",
+    artists: [{ id: "artist-stray-kids", name: "Stray Kids" }],
+  });
+
+  it("returns undefined when there are no items", () => {
+    expect(selectBest([], tokenize("anything"))).toBeUndefined();
+  });
+
+  it("picks the highest-overlap candidate regardless of order", () => {
+    expect(selectBest([tippy, comePlay], tokenize("come play advance"))).toBe(comePlay);
+  });
+
+  it("keeps Spotify's order on a tie", () => {
+    const a = makeTrack({ uri: "spotify:track:aaaaaaaaaaaaaaaaaaaaaa", name: "Love Story" });
+    const b = makeTrack({ uri: "spotify:track:bbbbbbbbbbbbbbbbbbbbbb", name: "Love Song" });
+    expect(selectBest([a, b], tokenize("love"))).toBe(a);
+  });
+
+  it("still returns the best (zero-overlap) candidate; the floor is the caller's job", () => {
+    expect(selectBest([tippy], tokenize("come play advance"))).toBe(tippy);
+  });
+});
+
 describe("searchTrack", () => {
   const mockFetch = jest.fn();
   const { logger } = jest.requireMock("../modules") as {
@@ -398,16 +445,67 @@ describe("searchTrack", () => {
     expect(track?.name).toBe("Seven Dollars");
   });
 
-  it("issues exactly one unvalidated search for an unsplit query", async () => {
-    const unrelated = makeTrack({ name: "Something Else", artists: [{ id: "artist-nobody", name: "Nobody" }] });
-    mockFetch.mockResolvedValueOnce(okResponse(searchBody([unrelated])));
+  it("issues exactly one search for an unsplit query and accepts a relevant result", async () => {
+    const relevant = makeTrack({
+      name: "Around the World",
+      artists: [{ id: "artist-daft-punk", name: "Daft Punk" }],
+    });
+    mockFetch.mockResolvedValueOnce(okResponse(searchBody([relevant])));
 
     const track = await searchTrack("daft punk");
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(sentQuery(0)).toBe("daft punk");
-    // No validation on the raw path: whatever Spotify ranked first is accepted.
-    expect(track?.name).toBe("Something Else");
+    // The raw path is not validated against a parsed title/artist, but the result
+    // shares the query tokens `daft` and `punk`, so it clears the relevance floor.
+    expect(track?.name).toBe("Around the World");
+  });
+
+  it("ranks the raw fallback by token overlap, not Spotify's order", async () => {
+    // The reported bug: `Come play - advance` splits to a bogus artist, the
+    // filtered search finds nothing, and the raw search returns an unrelated track
+    // first. Ranking by overlap must pick the track that shares the query tokens.
+    const wrong = makeTrack({ name: "Tippy Toes", artists: [{ id: "artist-xg", name: "XG" }] });
+    const right = makeTrack({
+      name: "Come Play",
+      artists: [{ id: "artist-stray-kids", name: "Stray Kids" }],
+    });
+    mockFetch
+      .mockResolvedValueOnce(okResponse(searchBody([])))
+      .mockResolvedValueOnce(okResponse(searchBody([wrong, right])));
+
+    const track = await searchTrack("Come play - advance");
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(sentQuery(1)).toBe("Come play - advance");
+    expect(track?.name).toBe("Come Play");
+  });
+
+  it("rejects a raw result that shares no query token (relevance floor)", async () => {
+    const unrelated = makeTrack({ name: "Tippy Toes", artists: [{ id: "artist-xg", name: "XG" }] });
+    mockFetch.mockResolvedValueOnce(okResponse(searchBody([unrelated])));
+
+    await expect(searchTrack("come play advance")).resolves.toBeUndefined();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("breaks overlap ties by keeping Spotify's order", async () => {
+    const first = makeTrack({
+      uri: "spotify:track:cccccccccccccccccccccc",
+      name: "Love Story",
+      artists: [{ id: "artist-a", name: "Artist A" }],
+    });
+    const second = makeTrack({
+      uri: "spotify:track:dddddddddddddddddddddd",
+      name: "Love Song",
+      artists: [{ id: "artist-b", name: "Artist B" }],
+    });
+    // Both share exactly the token `love`; the earlier candidate must win.
+    mockFetch.mockResolvedValueOnce(okResponse(searchBody([first, second])));
+
+    const track = await searchTrack("love");
+
+    expect(track?.uri).toBe("spotify:track:cccccccccccccccccccccc");
   });
 
   it("never issues more than two searches", async () => {

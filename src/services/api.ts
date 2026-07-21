@@ -182,18 +182,18 @@ function toTrack(item: SpotifyTrack): Track {
  */
 
 /**
- * How many search results to fetch.
+ * How many search results to fetch and rank.
  *
- * Note this does NOT currently buy us a better pick. `is_playable` is only
- * returned when Spotify applies track relinking, which requires a `market`
- * parameter — and we send none (see above). So the `is_playable !== false`
- * predicate in `runSearch` never filters anything and selection always resolves
- * to `items[0]`; the other four results are fetched and discarded.
+ * Selection ranks these candidates by token overlap with the query (see
+ * `selectBest`) instead of blindly taking `items[0]`, so all five are used, not
+ * only the first. Five is enough: the intended track reliably lands in the top
+ * few, and fetching more does not improve the pick.
  *
- * We keep the limit at 5 because the opt-in diagnostics log the full candidate
- * list: that is how we will find out how often `items[0]` is the wrong pick,
- * before spending a behavior change on it. Genuinely ranking these candidates
- * (which means sending `market`) is deliberately deferred to its own change.
+ * Ranking does NOT consult `is_playable`: that field is only returned when
+ * Spotify applies track relinking, which requires a `market` parameter, and we
+ * send none (see above). Filtering unplayable candidates is deferred to the
+ * Country-of-Play change, which adds a `market` and pre-filters this list before
+ * ranking.
  */
 const SEARCH_LIMIT = 5;
 
@@ -396,17 +396,58 @@ interface SearchAttempt {
   selected: SpotifyTrack | undefined;
 }
 
-/** Issues one `/search` call and picks a candidate. */
-async function runSearch(q: string): Promise<SearchAttempt> {
+/**
+ * Token overlap between a query and a candidate: how many distinct query tokens
+ * appear in the union of the candidate's track-name tokens and its artists'-name
+ * tokens. This is the relevance score selection ranks on.
+ */
+export function overlapScore(item: SpotifyTrack, queryTokens: Set<string>): number {
+  const haystack = new Set<string>([
+    ...tokenize(item.name),
+    ...item.artists.flatMap((a) => [...tokenize(a.name)]),
+  ]);
+  let score = 0;
+  for (const token of queryTokens) {
+    if (haystack.has(token)) {
+      score += 1;
+    }
+  }
+  return score;
+}
+
+/**
+ * Picks the candidate with the greatest token overlap with the query, keeping
+ * Spotify's order as the tie-break. Returns undefined when there are no items.
+ *
+ * The returned candidate may still score zero (nothing overlapped); callers that
+ * need a relevance floor check the score themselves. `is_playable` is not
+ * consulted — see the note on SEARCH_LIMIT.
+ */
+export function selectBest(
+  items: SpotifyTrack[],
+  queryTokens: Set<string>
+): SpotifyTrack | undefined {
+  let best: SpotifyTrack | undefined;
+  let bestScore = -1;
+  for (const item of items) {
+    const score = overlapScore(item, queryTokens);
+    // Strict `>` preserves Spotify's order on ties: the first item to reach a
+    // score keeps it, so an equal-scoring later candidate never displaces it.
+    if (score > bestScore) {
+      best = item;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/** Issues one `/search` call and picks the best-overlap candidate. */
+async function runSearch(q: string, queryTokens: Set<string>): Promise<SearchAttempt> {
   const params = new URLSearchParams({ q, type: "track", limit: String(SEARCH_LIMIT) });
   const endpoint = `/search?${params.toString()}`;
   const { data } = await spotifyFetch<SpotifySearchResponse>(endpoint);
   const items = data?.tracks?.items ?? [];
-  // This predicate reads like it filters unplayable tracks, but `is_playable` is
-  // absent without a `market` param (see the note on SEARCH_LIMIT), so it always
-  // resolves to items[0]. Kept as the honest expression of intent for the day we
-  // send `market`; the diagnostics below record the candidates it passed over.
-  const selected = items.find((item) => item.is_playable !== false);
+  const selected = selectBest(items, queryTokens);
   return { endpoint, data, items, selected };
 }
 
@@ -458,7 +499,7 @@ function logAttempt(
         is_playable: item.is_playable,
       })),
       selected: attempt.selected?.uri,
-      validation: verdict ?? "n/a (raw query is accepted without validation)",
+      validation: verdict ?? "n/a",
       rawResponse: attempt.data,
     })}`
   );
@@ -484,7 +525,15 @@ export async function searchTrack(
   const normalized = normalizeQuery(query);
 
   if (normalized.kind === "filtered") {
-    const attempt = await runSearch(normalized.q);
+    // Rank filtered candidates against the parsed title+artist tokens. Any
+    // candidate that then passes validateMatch already contains all of them, so
+    // this is behavior-preserving when the top result validates; it only helps
+    // when a lower-ranked candidate is the one that validates.
+    const tokens = new Set<string>([
+      ...tokenize(normalized.title),
+      ...tokenize(normalized.artist),
+    ]);
+    const attempt = await runSearch(normalized.q, tokens);
     const verdict = attempt.selected
       ? validateMatch(attempt.selected, normalized.title, normalized.artist)
       : { ok: false, reason: "filtered search returned no tracks" };
@@ -495,22 +544,37 @@ export async function searchTrack(
     // Fall through: the split was wrong, or the filters were too narrow.
   }
 
-  const attempt = await runSearch(query);
-  logAttempt("raw", query, attempt, undefined, options);
-  if (!attempt.selected) {
-    // Nothing was selected. Today that means the result set was empty: the
-    // `is_playable` predicate in `runSearch` cannot reject anything without a
-    // `market` param (see SEARCH_LIMIT). The count is logged anyway so that if we
-    // ever do send `market`, a non-zero count here reads as "all unplayable".
+  const rawTokens = tokenize(query);
+  const attempt = await runSearch(query, rawTokens);
+  const { selected } = attempt;
+  // Relevance floor: the raw fallback has no parsed title/artist to validate
+  // against, but a result that shares no token at all with the query is not a
+  // match — accepting one is exactly how a fuzzy raw search once queued a wholly
+  // unrelated track. Below the floor we report nothing found rather than queue it.
+  const matched = selected !== undefined && overlapScore(selected, rawTokens) > 0;
+  logAttempt(
+    "raw",
+    query,
+    attempt,
+    matched
+      ? { ok: true }
+      : {
+          ok: false,
+          reason: selected ? "no candidate shared a query token" : "raw search returned no tracks",
+        },
+    options
+  );
+  if (!matched || selected === undefined) {
     // The effect turns `undefined` into a silent "not-found", so this is the only
-    // place a search that resolved to nothing becomes diagnosable.
+    // place a search that resolved to nothing (empty, or all below the floor)
+    // becomes diagnosable without the opt-in per-effect logging.
     logger.debug(
       `Spotify search for ${JSON.stringify(query)} returned ${attempt.items.length} track(s), ` +
-        "none selected"
+        "none matched"
     );
     return undefined;
   }
-  return toTrack(attempt.selected);
+  return toTrack(selected);
 }
 
 /** Adds a track URI to the active device's playback queue. */
