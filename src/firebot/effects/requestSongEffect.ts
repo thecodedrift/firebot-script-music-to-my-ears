@@ -1,9 +1,15 @@
 import { Effects } from "@crowbartools/firebot-custom-scripts-types/types/effects";
-import { logger } from "../../modules";
+import { getParams, logger } from "../../modules";
 import { queueTrack, searchTrack, toErrorReason } from "../../services/api";
 import { errorTextFor } from "../../services/errorText";
 import { record } from "../../services/ledger";
-import { findBlockedTerm, isExplicitBlocked, isTooLong } from "../../services/moderation";
+import {
+  BlockHit,
+  findBlock,
+  isExplicitBlocked,
+  isTooLong,
+  parseBlockList,
+} from "../../services/moderation";
 import { cooldownSeconds, resolveCooldown } from "../../services/restrictions";
 import { namespaced } from "../../shared/constants";
 import { ErrorReason, Track } from "../../shared/types";
@@ -18,8 +24,12 @@ import {
 interface Model {
   query: string;
   allowExplicit: boolean;
-  /** Per-effect blocked terms (substring, case-insensitive). */
-  blockedTerms: string[];
+  /**
+   * Per-effect blocklist, one entry per line (terms, or Spotify artist/track
+   * links/URIs). A `string[]` from an effect saved before this became a textarea
+   * is still accepted; `parseBlockList` handles both.
+   */
+  blockedTerms: string | string[];
   /** Minutes the same track is ineligible to be requested again. 0 disables. */
   noRepeatMinutes: number;
   /** Minutes an artist is ineligible for anyone. 0 disables. */
@@ -42,6 +52,13 @@ interface Outputs {
   /** Seconds until the reported cooldown expires; 0 for every other reason. */
   errorCooldown: number;
 }
+
+/** Maps what the blocklist matched to the effect's `errorReason` output. */
+const BLOCK_REASON: Record<BlockHit["kind"], ErrorReason> = {
+  term: "blocked-term",
+  artist: "blocked-artist",
+  track: "blocked-track",
+};
 
 /**
  * Reads a numeric model field, falling back only when it was never set.
@@ -119,7 +136,8 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
       {
         label: "Error Reason",
         description:
-          "Why the request failed: not-found, not-playable, blocked-term, explicit, too-long, " +
+          "Why the request failed: not-found, not-playable, blocked-term, blocked-artist, " +
+          "blocked-track, explicit, too-long, " +
           "recently-played, artist-recently-played, user-artist-recently-played, " +
           "no-active-device, not-premium, not-linked, unknown.",
         defaultName: "errorReason",
@@ -151,10 +169,18 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
         <div class="control__indicator"></div>
       </label>
       <p class="muted">When off (default), tracks Spotify marks explicit are rejected.</p>
-      <h4 style="margin-top:15px">Blocked terms</h4>
-      <editable-list model="effect.blockedTerms" settings="blockedTermsSettings"></editable-list>
+      <h4 style="margin-top:15px">Blocked terms, artists &amp; tracks</h4>
+      <textarea
+        ng-model="effect.blockedTerms"
+        class="form-control"
+        rows="4"
+        placeholder="One per line: a term, or a Spotify artist/track link"
+      ></textarea>
       <p class="muted">
-        A track is rejected when any term appears (case-insensitive) in its artist or track name.
+        One entry per line. A Spotify <b>artist</b> or <b>track</b> link (or URI) blocks that exact
+        artist or track — so you can ban an artist without banning their name as a word. Any other
+        line is a term, rejected when it appears (case-insensitive) in the artist or track name. The
+        global blocklist in the script settings applies here too.
       </p>
     </eos-container>
     <eos-container header="Restrictions" pad-top="true">
@@ -217,20 +243,14 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
   // onTriggerEvent uses the imported DEFAULT_* constants instead. Keep in sync
   // with src/types/params.ts.
   optionsController: ($scope) => {
-    $scope.blockedTermsSettings = {
-      sortable: false,
-      showIndex: false,
-      addLabel: "Add term",
-      editLabel: "Edit term",
-      inputPlaceholder: "Enter blocked term",
-      noneAddedText: "No blocked terms",
-      noDuplicates: true,
-      trigger: $scope.trigger,
-      triggerMeta: $scope.triggerMeta,
-    };
-    // Seed defaults on a fresh effect; an emptied list stays empty (means "no terms").
-    if ($scope.effect.blockedTerms === undefined) {
-      $scope.effect.blockedTerms = ["karaoke", "instrumental", "inst."];
+    // Migrate an effect saved when this was an editable-list: its `string[]`
+    // becomes newline text so it renders in the textarea and re-saves in the new
+    // shape. Seed the defaults on a brand-new effect; an emptied field ("") is a
+    // deliberate "no entries" and is left alone.
+    if (Array.isArray($scope.effect.blockedTerms)) {
+      $scope.effect.blockedTerms = $scope.effect.blockedTerms.join("\n");
+    } else if ($scope.effect.blockedTerms === undefined) {
+      $scope.effect.blockedTerms = "karaoke\ninstrumental\ninst.";
     }
     if ($scope.effect.enableLogging === undefined) {
       $scope.effect.enableLogging = false;
@@ -284,12 +304,17 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
       // Permanent rejections first, first match wins: a track that is too long or
       // explicit will never succeed, so "don't ask again" beats "ask again later".
       //
-      // Per-effect terms; fall back to defaults only when the field was never set.
-      const blockedTerms = Array.isArray(effect.blockedTerms)
-        ? effect.blockedTerms
-        : DEFAULT_BLOCKED_TERMS;
-      if (findBlockedTerm(track, blockedTerms)) {
-        return reject("blocked-term", track);
+      // The global blocklist (script settings) is merged ahead of this effect's
+      // own list. A never-set per-effect field falls back to the defaults; an
+      // empty string is a deliberate "no entries" and is honored as such.
+      const perEffect =
+        effect.blockedTerms === undefined ? DEFAULT_BLOCKED_TERMS : effect.blockedTerms;
+      const blocked = findBlock(track, [
+        ...parseBlockList(getParams().spotifyBlockList),
+        ...parseBlockList(perEffect),
+      ]);
+      if (blocked) {
+        return reject(BLOCK_REASON[blocked.kind], track);
       }
       if (isExplicitBlocked(track, Boolean(effect.allowExplicit))) {
         return reject("explicit", track);

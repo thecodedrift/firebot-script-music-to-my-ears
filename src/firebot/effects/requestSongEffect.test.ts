@@ -1,7 +1,13 @@
 import { num, requestSongEffect } from "./requestSongEffect";
+import { getParams } from "../../modules";
 import { queueTrack, searchTrack } from "../../services/api";
 import { clear as clearLedger } from "../../services/ledger";
 import { Track } from "../../shared/types";
+
+// Real 22-char base62 Spotify ids, so the id-shaped blocklist tests exercise the
+// same matcher the runtime does.
+const BLOCKED_ARTIST_ID = "2SI7Y8t34pQv0KOfj0lAd5";
+const BLOCKED_TRACK_ID = "37ozVDmL5b6NNVWFYgAlkz";
 
 jest.mock("../../modules", () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
@@ -61,6 +67,8 @@ beforeEach(() => {
   clearLedger();
   (searchTrack as jest.Mock).mockResolvedValue(track());
   (queueTrack as jest.Mock).mockResolvedValue(undefined);
+  // Default: no global blocklist. Tests that need one override this.
+  (getParams as jest.Mock).mockReturnValue({});
 });
 
 describe("requestSongEffect logging option", () => {
@@ -120,6 +128,84 @@ describe("requestSongEffect success", () => {
     expect(outputs.errorReason).toBe("");
     expect(outputs.errorText).toBe("");
     expect(outputs.errorCooldown).toBe(0);
+  });
+});
+
+describe("blocklist", () => {
+  it("rejects a per-effect blocked term (blocked-term)", async () => {
+    // "baskets" is a substring of the track's artist, "Happy Birthday Mr. Baskets".
+    const { outputs } = await runEffect({ query: "q", ...NO_LIMITS, blockedTerms: "baskets" });
+
+    expect(outputs.success).toBe(false);
+    expect(outputs.errorReason).toBe("blocked-term");
+    expect(queueTrack).not.toHaveBeenCalled();
+  });
+
+  it("still honors a legacy string[] blocked-terms value", async () => {
+    const { outputs } = await runEffect({ query: "q", ...NO_LIMITS, blockedTerms: ["baskets"] });
+
+    expect(outputs.errorReason).toBe("blocked-term");
+  });
+
+  it("blocks a globally banned artist by link (blocked-artist), naming the artist", async () => {
+    (searchTrack as jest.Mock).mockResolvedValue(track({ artistIds: [BLOCKED_ARTIST_ID] }));
+    (getParams as jest.Mock).mockReturnValue({
+      spotifyBlockList: `https://open.spotify.com/artist/${BLOCKED_ARTIST_ID}`,
+    });
+
+    const { outputs } = await runEffect({ query: "q", ...NO_LIMITS });
+
+    expect(outputs.errorReason).toBe("blocked-artist");
+    expect(outputs.errorText).toContain("is a blocked artist");
+    expect(outputs.errorText).toContain("Happy Birthday Mr. Baskets");
+    expect(queueTrack).not.toHaveBeenCalled();
+  });
+
+  it("blocks a globally banned track by URI (blocked-track)", async () => {
+    (searchTrack as jest.Mock).mockResolvedValue(track({ uri: `spotify:track:${BLOCKED_TRACK_ID}` }));
+    (getParams as jest.Mock).mockReturnValue({
+      spotifyBlockList: `spotify:track:${BLOCKED_TRACK_ID}`,
+    });
+
+    const { outputs } = await runEffect({ query: "q", ...NO_LIMITS });
+
+    expect(outputs.errorReason).toBe("blocked-track");
+    expect(queueTrack).not.toHaveBeenCalled();
+  });
+
+  it("queues when neither the global list nor the per-effect list matches", async () => {
+    (getParams as jest.Mock).mockReturnValue({ spotifyBlockList: "someunrelatedword" });
+
+    const { outputs } = await runEffect({ query: "q", ...NO_LIMITS, blockedTerms: "nope" });
+
+    expect(outputs.success).toBe(true);
+    expect(queueTrack).toHaveBeenCalled();
+  });
+});
+
+describe("blocklist options controller", () => {
+  const migrate = (effect: Record<string, unknown>): Record<string, unknown> => {
+    const scope = { effect };
+    (requestSongEffect.optionsController as (s: unknown) => void)(scope);
+    return scope.effect;
+  };
+
+  it("seeds the default block entries as newline text on a fresh effect", () => {
+    expect(migrate({}).blockedTerms).toBe("karaoke\ninstrumental\ninst.");
+  });
+
+  it("migrates a legacy string[] to newline text", () => {
+    expect(migrate({ blockedTerms: ["karaoke", "metallica"] }).blockedTerms).toBe(
+      "karaoke\nmetallica"
+    );
+  });
+
+  it("leaves an intentionally-emptied field alone", () => {
+    expect(migrate({ blockedTerms: "" }).blockedTerms).toBe("");
+  });
+
+  it("renders a textarea bound to the model", () => {
+    expect(requestSongEffect.optionsTemplate).toContain('ng-model="effect.blockedTerms"');
   });
 });
 

@@ -23,6 +23,8 @@ const TEMPLATES: Record<ErrorReason, string> = {
   "not-found": "I couldn't find that song on Spotify.",
   "not-playable": "{trackName} isn't playable on this account.",
   "blocked-term": "{trackName} is on the blocked list.",
+  "blocked-artist": "{artistName} is a blocked artist.",
+  "blocked-track": "{trackName} is a blocked track.",
   explicit: "{trackName} is marked explicit, and explicit tracks are off.",
   "too-long": "{trackName} is too long to add to the queue.",
   "recently-played": "{trackName} was played recently. Try again in {cooldown}.",

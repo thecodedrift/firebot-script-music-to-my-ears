@@ -7,6 +7,8 @@ export type ErrorReason =
   | "not-found"
   | "not-playable"
   | "blocked-term"
+  | "blocked-artist"
+  | "blocked-track"
   | "explicit"
   | "too-long"
   | "recently-played"
