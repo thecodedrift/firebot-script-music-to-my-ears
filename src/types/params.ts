@@ -17,6 +17,15 @@ export interface Params {
    * `services/api.ts` for how it is validated and applied.
    */
   spotifyCountryCode: string;
+  /**
+   * Optional global blocklist, one entry per line. Each line is classified by
+   * shape: a Spotify artist or track link/URI blocks that exact artist or
+   * track; any other line is a case-insensitive term matched against artist and
+   * track names. Empty (the default) blocks nothing. Applied to every song
+   * request on top of each Request Song effect's own blocked list. See
+   * `parseBlockList` / `findBlock` in `services/moderation.ts`.
+   */
+  spotifyBlockList: string;
 }
 
 /**

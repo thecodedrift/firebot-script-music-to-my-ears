@@ -50,6 +50,18 @@ const script: Firebot.CustomScript<Params> = {
         "account's country automatically.",
       default: "",
     },
+    spotifyBlockList: {
+      type: "string",
+      useTextArea: true,
+      title: "Blocked artists, tracks & terms",
+      description:
+        "Optional global blocklist, one entry per line, applied to every song request on top of " +
+        "each Request Song effect's own blocked list. A Spotify artist or track link/URI (or a " +
+        "bare id) blocks that exact artist or track — so you can ban an artist without banning " +
+        "their name as a word; any other line is a case-insensitive term matched against the " +
+        "artist and track names. Leave blank to block nothing.",
+      default: "",
+    },
   }),
 
   run: (runRequest) => {

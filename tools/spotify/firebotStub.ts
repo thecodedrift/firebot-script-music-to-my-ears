@@ -104,6 +104,8 @@ export function initHarnessModules(env: HarnessEnv): void {
     spotifyClientSecret: env.clientSecret,
     // Optional market for live runs; empty by default so behavior is unchanged.
     spotifyCountryCode: process.env.SPOTIFY_COUNTRY_CODE ?? "",
+    // The live harness never blocks; the global blocklist is exercised by unit tests.
+    spotifyBlockList: "",
   });
 
   // Clear any cached expiry from a prior init in this process, so the seeded

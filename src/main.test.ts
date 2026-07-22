@@ -19,7 +19,12 @@ function makeHarness() {
 }
 
 const runRequest = (modules: unknown) => ({
-  parameters: { spotifyClientId: "", spotifyClientSecret: "", spotifyCountryCode: "" },
+  parameters: {
+    spotifyClientId: "",
+    spotifyClientSecret: "",
+    spotifyCountryCode: "",
+    spotifyBlockList: "",
+  },
   modules,
   trigger: { type: "startup_script", metadata: {} },
   firebot: {},
@@ -32,6 +37,7 @@ describe("script lifecycle", () => {
     // The no-repeat window used to live here. It moved to each Request Song
     // effect so it takes effect without a Firebot restart.
     expect(Object.keys(params).sort()).toEqual([
+      "spotifyBlockList",
       "spotifyClientId",
       "spotifyClientSecret",
       "spotifyCountryCode",
