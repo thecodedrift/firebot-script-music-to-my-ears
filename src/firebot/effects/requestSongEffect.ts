@@ -83,7 +83,8 @@ export function num(value: unknown, fallback: number): number {
 function failure(
   reason: ErrorReason,
   track?: Track,
-  cooldown = 0
+  cooldown = 0,
+  artistName?: string
 ): { success: boolean; outputs: Outputs } {
   // Top-level `success` must stay `true`: Firebot's effect-runner only registers
   // `outputs` when the effect reports success (it discards them on `success: false`),
@@ -99,9 +100,10 @@ function failure(
       errorReason: reason,
       errorText: errorTextFor(reason, {
         trackName: track?.name,
-        // The primary artist, not the joined credit list: that is what the
-        // artist cooldowns key on, so it is what the message must name.
-        artistName: track?.artists[0],
+        // Default to the primary artist (what the artist cooldowns key on), but
+        // let the caller override with the artist that actually matched: a
+        // blocked *featured* artist must be named, not the primary credit.
+        artistName: artistName ?? track?.artists[0],
         cooldown: cooldown || undefined,
       }),
       errorCooldown: cooldown,
@@ -275,18 +277,18 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
     // request was turned away, so a streamer can see the rejection that follows
     // the search rather than only the search. Emitted at `info` so the checkbox
     // alone surfaces it, without raising Firebot's global log level.
-    const reject = (reason: ErrorReason, track?: Track, cooldown = 0) => {
+    const reject = (reason: ErrorReason, track?: Track, cooldown = 0, artistName?: string) => {
       if (log) {
         logger.info(
           `Song request rejected [${reason}]: ${JSON.stringify({
             track: track?.name,
-            artist: track?.artists[0],
+            artist: artistName ?? track?.artists[0],
             uri: track?.uri,
             ...(cooldown ? { retryInSeconds: cooldown } : {}),
           })}`
         );
       }
-      return failure(reason, track, cooldown);
+      return failure(reason, track, cooldown, artistName);
     };
 
     const query = (effect.query ?? "").trim();
@@ -314,7 +316,7 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
         ...parseBlockList(perEffect),
       ]);
       if (blocked) {
-        return reject(BLOCK_REASON[blocked.kind], track);
+        return reject(BLOCK_REASON[blocked.kind], track, 0, blocked.artist);
       }
       if (isExplicitBlocked(track, Boolean(effect.allowExplicit))) {
         return reject("explicit", track);

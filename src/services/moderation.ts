@@ -25,6 +25,13 @@ export interface BlockHit {
   kind: "term" | "track" | "artist";
   /** The blocklist line that matched. */
   raw: string;
+  /**
+   * For an `artist` match, the name of the artist that matched — which may be a
+   * feature, not the primary credit, since an artist entry matches *any*
+   * credited id. The caller names this in the rejection message rather than the
+   * primary artist, so "X is a blocked artist" names the artist actually banned.
+   */
+  artist?: string;
 }
 
 // A Spotify id is 22 base62 characters. That length-and-alphabet shape is what
@@ -34,8 +41,10 @@ const ID = "[A-Za-z0-9]{22}";
 const URI_RE = new RegExp(`^spotify:(track|artist):(${ID})$`, "i");
 // A link like https://open.spotify.com/track/<id>?si=... , tolerating the
 // locale prefix Spotify adds when you copy from a localized client
-// (open.spotify.com/intl-de/track/<id>).
-const URL_RE = new RegExp(`spotify\\.com/(?:intl-[a-z]{2}/)?(track|artist)/(${ID})`, "i");
+// (open.spotify.com/intl-de/track/<id>). The `\b` anchors `spotify.com` to a
+// host boundary so a look-alike host embedding it (notreallyspotify.com/...)
+// falls through to a plain term instead of matching as a real link.
+const URL_RE = new RegExp(`\\bspotify\\.com/(?:intl-[a-z]{2}/)?(track|artist)/(${ID})`, "i");
 const BARE_ID_RE = new RegExp(`^${ID}$`);
 
 /**
@@ -115,20 +124,24 @@ export function findBlock(track: Track, entries: BlockEntry[]): BlockHit | undef
           return { kind: "track", raw: entry.raw };
         }
         break;
-      case "artist":
-        if (track.artistIds.includes(entry.value)) {
-          return { kind: "artist", raw: entry.raw };
+      case "artist": {
+        const i = track.artistIds.indexOf(entry.value);
+        if (i !== -1) {
+          return { kind: "artist", raw: entry.raw, artist: track.artists[i] };
         }
         break;
-      case "id":
+      }
+      case "id": {
         // Untyped: block whichever it turns out to name.
         if (id === entry.value) {
           return { kind: "track", raw: entry.raw };
         }
-        if (track.artistIds.includes(entry.value)) {
-          return { kind: "artist", raw: entry.raw };
+        const i = track.artistIds.indexOf(entry.value);
+        if (i !== -1) {
+          return { kind: "artist", raw: entry.raw, artist: track.artists[i] };
         }
         break;
+      }
     }
   }
   return undefined;

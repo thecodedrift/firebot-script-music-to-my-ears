@@ -161,6 +161,27 @@ describe("blocklist", () => {
     expect(queueTrack).not.toHaveBeenCalled();
   });
 
+  it("names the matched artist, not the primary, when a featured artist is blocked", async () => {
+    // Primary is someone else; the blocked artist is only a feature. The match
+    // is by id, so it still fires — and the message must name the feature.
+    (searchTrack as jest.Mock).mockResolvedValue(
+      track({
+        artist: "Primary Act, Blocked Feature",
+        artists: ["Primary Act", "Blocked Feature"],
+        artistIds: ["primary-act", BLOCKED_ARTIST_ID],
+      })
+    );
+    (getParams as jest.Mock).mockReturnValue({
+      spotifyBlockList: `spotify:artist:${BLOCKED_ARTIST_ID}`,
+    });
+
+    const { outputs } = await runEffect({ query: "q", ...NO_LIMITS });
+
+    expect(outputs.errorReason).toBe("blocked-artist");
+    expect(outputs.errorText).toBe("Blocked Feature is a blocked artist.");
+    expect(outputs.errorText).not.toContain("Primary Act");
+  });
+
   it("blocks a globally banned track by URI (blocked-track)", async () => {
     (searchTrack as jest.Mock).mockResolvedValue(track({ uri: `spotify:track:${BLOCKED_TRACK_ID}` }));
     (getParams as jest.Mock).mockReturnValue({

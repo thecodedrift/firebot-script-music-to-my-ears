@@ -75,6 +75,12 @@ describe("parseBlockEntry", () => {
   it("classifies a bare 22-char id as untyped", () => {
     expect(parseBlockEntry(TRACK_ID)).toMatchObject({ kind: "id", value: TRACK_ID });
   });
+
+  it("does not treat a look-alike host as a Spotify link", () => {
+    // "notreallyspotify.com" embeds "spotify.com"; the host boundary must stop it
+    // from being read as a real track link — it falls through to a term.
+    expect(parseBlockEntry(`https://notreallyspotify.com/track/${TRACK_ID}`)?.kind).toBe("term");
+  });
 });
 
 describe("parseBlockList", () => {
@@ -119,10 +125,13 @@ describe("findBlock", () => {
     expect(hit?.kind).toBe("track");
   });
 
-  it("blocks a track by any credited artist id", () => {
-    const collab = track({ artistIds: ["someone-else", ARTIST_ID] });
+  it("blocks a track by any credited artist id and names the matched artist", () => {
+    const collab = track({
+      artists: ["Someone Else", "Blocked One"],
+      artistIds: ["someone-else", ARTIST_ID],
+    });
     const hit = findBlock(collab, parseBlockList(`spotify:artist:${ARTIST_ID}`));
-    expect(hit?.kind).toBe("artist");
+    expect(hit).toEqual({ kind: "artist", raw: `spotify:artist:${ARTIST_ID}`, artist: "Blocked One" });
   });
 
   it("does not block a different track whose name merely resembles the query", () => {
