@@ -1,5 +1,33 @@
 # firebot-music-to-my-ears
 
+## 2.1.0
+
+### Minor Changes
+
+- 0dfe2e0: Add an optional global "Country of Play" setting — a 2-letter country code (e.g. `US`, `GB`, `DE`).
+  When set, song requests resolve against that country's Spotify catalog: the code is sent as the
+  Spotify `market`, region-locked tracks are dropped from the results instead of being queued, and a
+  pasted link to a track that can't play in that country reports "not playable". Leaving it blank keeps
+  today's behavior (your linked account's country is used automatically). This pairs with relevance
+  ranking so requests match a playable track more often.
+- 31f42f1: Add a global blocklist for artists, tracks, and terms. A new script setting takes one entry per
+  line, applied to every song request on top of each Request Song effect's own list. Paste a Spotify
+  artist or track link (or URI) to block that exact artist or track by id — so you can ban an artist
+  without banning their name as a word — or type any other line as a case-insensitive term matched
+  against the artist and track names. The per-effect blocked-terms field becomes the same one-per-line
+  textarea and accepts links too; effects saved with the old list upgrade automatically. Blocks now
+  report `blocked-artist` or `blocked-track` (alongside the existing `blocked-term`) so you can tell a
+  viewer exactly why their request was turned away.
+
+### Patch Changes
+
+- 1f2b409: Song requests now rank Spotify search results by relevance instead of blindly taking the first
+  result. Candidates are scored by how many query tokens appear in the track and artist names, and the
+  best-matching one is queued (ties keep Spotify's order). The raw fallback also gains a relevance
+  floor: when no candidate shares any word with the request, it reports "not found" rather than queuing
+  an unrelated track. Fixes requests like `Come play - advance` that previously queued a wildly wrong
+  song.
+
 ## 2.0.0
 
 ### Major Changes
