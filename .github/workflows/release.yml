@@ -38,6 +38,7 @@ jobs:
       # which builds the bundle, tags v<version>, and creates a GitHub Release
       # with the built .js attached.
       - name: Version PR or release
+        id: changesets
         uses: changesets/action@v1
         with:
           version: pnpm changeset:version
@@ -47,3 +48,112 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # When the step above opened/updated the Version PR — there are pending
+      # changesets and nothing was published this run — build the bundle from the
+      # version-bumped branch and attach it, so the "current planned version" can
+      # be tested before release, mirroring the per-PR preview build in ci.yml.
+      #
+      # ci.yml can't do this itself: the Version PR is opened with the default
+      # GITHUB_TOKEN, and GitHub does not start `pull_request` workflows for
+      # events raised by GITHUB_TOKEN (a recursion guard), so that PR gets no CI
+      # run and no artifact. Building here — where release.yml already holds a
+      # write token — avoids handing the changesets bot a PAT just to trigger CI.
+      - name: Check out the planned version
+        id: planned
+        if: steps.changesets.outputs.hasChangesets == 'true' && steps.changesets.outputs.published != 'true'
+        run: |
+          git fetch origin changeset-release/main
+          # Detach onto the bumped branch's tip; package.json now carries the
+          # planned version, which webpack inlines as __SCRIPT_VERSION__.
+          git checkout -B changeset-release-preview FETCH_HEAD
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # node_modules from the install above carries over the checkout (the bump
+      # touches only package.json/CHANGELOG, not the dependency graph).
+      - name: Build the planned version
+        if: steps.planned.outcome == 'success'
+        run: pnpm build
+
+      # Uploaded only on a successful build, so an artifact implies a good bundle.
+      # Firebot loads a single .js; upload-artifact always zips, so testers
+      # download the zip and unpack the one file inside.
+      - name: Upload planned-version build
+        id: upload
+        if: steps.planned.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: musicToMyEars-v${{ steps.planned.outputs.version }}-${{ github.sha }}
+          path: dist/musicToMyEars.js
+          retention-days: 14
+          if-no-files-found: error
+
+      # Rewrites the <!-- artifact --> region of the Version PR body so it always
+      # points at the newest planned-version build. changesets/action regenerates
+      # that body (release notes) earlier in this same job, so this step runs
+      # after it and re-appends the region every run.
+      - name: Link the planned-version build in the Version PR
+        if: steps.planned.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          PLANNED_VERSION: ${{ steps.planned.outputs.version }}
+        with:
+          script: |
+            const START = '<!-- artifact -->';
+            const END = '<!-- /artifact -->';
+
+            const { data: prs } = await github.rest.pulls.list({
+              ...context.repo,
+              state: 'open',
+              head: `${context.repo.owner}:changeset-release/main`,
+            });
+            const pr = prs[0];
+            if (!pr) {
+              core.info('No open Version PR found; nothing to link.');
+              return;
+            }
+
+            const runUrl =
+              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const url = process.env.ARTIFACT_URL || runUrl;
+            const version = process.env.PLANNED_VERSION;
+
+            const block = [
+              START,
+              `### Preview build — v${version} (current planned release)`,
+              '',
+              `**[Download the built plugin](${url})** — built from the version bump on this`,
+              'branch, kept for 14 days.',
+              '',
+              'It arrives zipped (a GitHub Actions constraint, even for one file). Unzip it, then',
+              'load `musicToMyEars.js` in Firebot via **Settings → Scripts**. Requires a GitHub login.',
+              END,
+            ].join('\n');
+
+            // Read the freshest body: changesets/action rewrote it earlier in
+            // this job, so the payload can't be trusted here.
+            const { data: full } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: pr.number,
+            });
+            const body = full.body ?? '';
+
+            const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const region = new RegExp(`${escape(START)}[\\s\\S]*?${escape(END)}`);
+            // Function replacer, not a string: `$&`/`$1` in the replacement would
+            // otherwise be read as capture references.
+            const next = region.test(body)
+              ? body.replace(region, () => block)
+              : `${body.trimEnd()}\n\n${block}\n`;
+
+            if (next === body) {
+              core.info('Version PR body already up to date; nothing to write.');
+              return;
+            }
+            await github.rest.pulls.update({
+              ...context.repo,
+              pull_number: pr.number,
+              body: next,
+            });
+            core.info(`Linked planned-version build: ${url}`);
