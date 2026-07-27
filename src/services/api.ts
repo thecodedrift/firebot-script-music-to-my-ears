@@ -406,12 +406,6 @@ export function validateMatch(item: SpotifyTrack, title: string, artist: string)
   return { ok: true };
 }
 
-/** Per-call knobs for {@link searchTrack}. */
-export interface SearchOptions {
-  /** Emit verbose per-attempt diagnostics. Off unless the streamer opted in. */
-  log?: boolean;
-}
-
 interface SearchAttempt {
   endpoint: string;
   data: SpotifySearchResponse | undefined;
@@ -486,16 +480,19 @@ async function runSearch(q: string, queryTokens: Set<string>): Promise<SearchAtt
 }
 
 /**
- * Opt-in diagnostics for one search attempt.
+ * Detailed diagnostics for one search attempt.
  *
  * Deliberately does NOT call `redactEndpoint()`. That redaction exists so the
- * always-on failure-triage block in `spotifyFetch` is safe to paste into a public
- * issue. This channel is the opposite: the streamer ticked a box asking to see
- * exactly the query text and the response body, for their own viewer's request.
- * Do not "fix" one of these two sites into the other.
+ * failure-triage block in `spotifyFetch` is safe to paste into a public issue.
+ * This channel is the opposite: showing exactly the query text and the response
+ * body is its entire purpose, because that is what answers "why did this request
+ * match the wrong track". Do not "fix" one of these two sites into the other.
  *
- * Emitted at `info`, not `debug`: Firebot hides `debug` unless the global log
- * level is raised, which would make the per-effect checkbox useless on its own.
+ * Emitted at `debug`, and unconditionally. The script's own session debug log
+ * captures every level (see `services/debugLog.ts`), so these records are always
+ * kept for a bug report while Firebot's log file stays quiet unless the streamer
+ * raises its level. This used to be `info` behind a per-effect checkbox, which
+ * meant the records were missing from exactly the sessions that needed them.
  *
  * The invariant both channels share: never emit the bearer token, the refresh
  * token, or the client secret. We log the endpoint and body only, never headers.
@@ -504,16 +501,12 @@ function logAttempt(
   kind: "filtered" | "raw",
   q: string,
   attempt: SearchAttempt,
-  verdict: MatchVerdict | undefined,
-  options: SearchOptions
+  verdict: MatchVerdict | undefined
 ): void {
-  if (!options.log) {
-    return;
-  }
   // Compact single-line JSON on purpose: a pretty-printed record spans dozens of
-  // lines per search and drowns the Firebot log. Parse it out of the line if you
-  // need to read it (the tests do).
-  logger.info(
+  // lines per search and drowns the log. Parse it out of the line if you need to
+  // read it (the tests do).
+  logger.debug(
     `Song request search [${kind}]: ${JSON.stringify({
       attempt: kind,
       query: q,
@@ -547,10 +540,7 @@ function logAttempt(
  * raw query. At most two searches are issued. Returns undefined when nothing
  * matches.
  */
-export async function searchTrack(
-  query: string,
-  options: SearchOptions = {}
-): Promise<Track | undefined> {
+export async function searchTrack(query: string): Promise<Track | undefined> {
   const id = parseTrackId(query);
   if (id) {
     return getTrack(id);
@@ -568,15 +558,12 @@ export async function searchTrack(
     // Spotify sorts it first, be picked and then rejected, falling through as
     // before. validateMatch gates every filtered result, so no wrong track is
     // queued either way.
-    const tokens = new Set<string>([
-      ...tokenize(normalized.title),
-      ...tokenize(normalized.artist),
-    ]);
+    const tokens = new Set<string>([...tokenize(normalized.title), ...tokenize(normalized.artist)]);
     const attempt = await runSearch(normalized.q, tokens);
     const verdict = attempt.selected
       ? validateMatch(attempt.selected, normalized.title, normalized.artist)
       : { ok: false, reason: "filtered search returned no tracks" };
-    logAttempt("filtered", normalized.q, attempt, verdict, options);
+    logAttempt("filtered", normalized.q, attempt, verdict);
     if (attempt.selected && verdict.ok) {
       return toTrack(attempt.selected);
     }
@@ -600,13 +587,13 @@ export async function searchTrack(
       : {
           ok: false,
           reason: selected ? "no candidate shared a query token" : "raw search returned no tracks",
-        },
-    options
+        }
   );
   if (!matched || selected === undefined) {
     // The effect turns `undefined` into a silent "not-found", so this is the only
     // place a search that resolved to nothing (empty, or all below the floor)
-    // becomes diagnosable without the opt-in per-effect logging.
+    // becomes diagnosable on its own line rather than only inside the attempt
+    // record.
     logger.debug(
       `Spotify search for ${JSON.stringify(query)} returned ${attempt.items.length} track(s), ` +
         "none matched"

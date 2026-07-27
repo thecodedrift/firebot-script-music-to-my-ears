@@ -71,30 +71,25 @@ beforeEach(() => {
   (getParams as jest.Mock).mockReturnValue({});
 });
 
-describe("requestSongEffect logging option", () => {
-  it("defaults the checkbox to off in the options controller", () => {
+describe("requestSongEffect diagnostics", () => {
+  // The effect used to carry an "Enable logging" checkbox. It defaulted to off,
+  // so the records it gated were missing from every session that hit a bug; the
+  // session debug log replaced it.
+  it("offers no logging option", () => {
     const scope = { effect: {} as Record<string, unknown> };
     const controller = requestSongEffect.optionsController as (s: unknown) => void;
     controller(scope);
 
-    expect(scope.effect.enableLogging).toBe(false);
+    expect(scope.effect.enableLogging).toBeUndefined();
+    expect(requestSongEffect.optionsTemplate).not.toContain("enableLogging");
+    expect(requestSongEffect.optionsTemplate).not.toContain("Enable logging");
+    expect(requestSongEffect.optionsTemplate).not.toContain("Troubleshooting");
   });
 
-  it("renders the Enable logging checkbox bound to the model", () => {
-    expect(requestSongEffect.optionsTemplate).toContain('ng-model="effect.enableLogging"');
-    expect(requestSongEffect.optionsTemplate).toContain("Enable logging");
-  });
-
-  it("passes log: false to searchTrack when the box is unchecked", async () => {
+  it("searches without a per-call logging knob", async () => {
     await runEffect({ query: "seven dollars", ...NO_LIMITS });
 
-    expect(searchTrack).toHaveBeenCalledWith("seven dollars", { log: false });
-  });
-
-  it("passes log: true to searchTrack when the box is checked", async () => {
-    await runEffect({ query: "seven dollars", ...NO_LIMITS, enableLogging: true });
-
-    expect(searchTrack).toHaveBeenCalledWith("seven dollars", { log: true });
+    expect(searchTrack).toHaveBeenCalledWith("seven dollars");
   });
 });
 
@@ -425,18 +420,18 @@ describe("failure outputs", () => {
 });
 
 describe("rejection logging", () => {
-  const infoLog = () =>
-    (jest.requireMock("../../modules") as { logger: { info: jest.Mock } }).logger.info;
+  const debugLog = () =>
+    (jest.requireMock("../../modules") as { logger: { debug: jest.Mock } }).logger.debug;
 
   const rejectionLines = () =>
-    infoLog()
+    debugLog()
       .mock.calls.map((c: unknown[]) => String(c[0]))
       .filter((line: string) => line.startsWith("Song request rejected"));
 
-  it("logs a rejection with its reason when logging is on", async () => {
+  it("logs a rejection with its reason", async () => {
     (searchTrack as jest.Mock).mockResolvedValue(track({ durationMs: 600_000 }));
 
-    await runEffect({ query: "long one", ...NO_LIMITS, maxTrackLengthSeconds: 420, enableLogging: true });
+    await runEffect({ query: "long one", ...NO_LIMITS, maxTrackLengthSeconds: 420 });
 
     const lines = rejectionLines();
     expect(lines).toHaveLength(1);
@@ -445,7 +440,7 @@ describe("rejection logging", () => {
   });
 
   it("includes the retry wait when the rejection is a cooldown", async () => {
-    const effect = { query: "q", ...NO_LIMITS, artistCooldownMinutes: 60, enableLogging: true };
+    const effect = { query: "q", ...NO_LIMITS, artistCooldownMinutes: 60 };
     await runEffect(effect, "alice");
     (searchTrack as jest.Mock).mockResolvedValue(track({ uri: "spotify:track:2" }));
     await runEffect(effect, "bob");
@@ -455,12 +450,12 @@ describe("rejection logging", () => {
     expect(line).toContain("retryInSeconds");
   });
 
-  it("stays silent when logging is off", async () => {
+  it("needs nothing enabled to log a rejection", async () => {
     (searchTrack as jest.Mock).mockResolvedValue(track({ durationMs: 600_000 }));
 
     await runEffect({ query: "long one", ...NO_LIMITS, maxTrackLengthSeconds: 420 });
 
-    expect(rejectionLines()).toHaveLength(0);
+    expect(rejectionLines()).toHaveLength(1);
   });
 });
 

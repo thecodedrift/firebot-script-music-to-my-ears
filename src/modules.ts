@@ -1,5 +1,6 @@
 import { ScriptModules } from "@crowbartools/firebot-custom-scripts-types";
 import { Logger } from "@crowbartools/firebot-custom-scripts-types/types/modules/logger";
+import { LogLevel, record as recordDebugLog } from "./services/debugLog";
 import { Params } from "./types/params";
 
 /**
@@ -10,10 +11,16 @@ import { Params } from "./types/params";
  */
 let modules: ScriptModules | undefined;
 let params: Params | undefined;
+let firebotVersion: string | undefined;
 
-export function initModules(scriptModules: ScriptModules, scriptParams: Params): void {
+export function initModules(
+  scriptModules: ScriptModules,
+  scriptParams: Params,
+  hostVersion?: string
+): void {
   modules = scriptModules;
   params = scriptParams;
+  firebotVersion = hostVersion;
 }
 
 export function getModules(): ScriptModules {
@@ -35,10 +42,33 @@ export function setParams(scriptParams: Params): void {
   params = scriptParams;
 }
 
-/** Thin proxy so callers can `import { logger }` and log at any time. */
+/**
+ * The Firebot version this script is running under, for the debug log header.
+ * `undefined` until `initModules` runs, and on any host that omits it.
+ */
+export function getFirebotVersion(): string | undefined {
+  return firebotVersion;
+}
+
+/**
+ * Thin proxy so callers can `import { logger }` and log at any time.
+ *
+ * Every call is also captured in the script's own session debug log. Recording
+ * happens BEFORE forwarding on purpose: this proxy throws when it is called
+ * before `initModules`, and a record that never reached Firebot is exactly the
+ * kind we most want to have kept.
+ */
+function proxy(level: LogLevel): Logger[LogLevel] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (msg: string, ...meta: any[]) => {
+    recordDebugLog(level, msg, meta);
+    getModules().logger[level](msg, ...meta);
+  };
+}
+
 export const logger: Logger = {
-  debug: (msg, ...meta) => getModules().logger.debug(msg, ...meta),
-  info: (msg, ...meta) => getModules().logger.info(msg, ...meta),
-  warn: (msg, ...meta) => getModules().logger.warn(msg, ...meta),
-  error: (msg, ...meta) => getModules().logger.error(msg, ...meta),
+  debug: proxy("debug"),
+  info: proxy("info"),
+  warn: proxy("warn"),
+  error: proxy("error"),
 };

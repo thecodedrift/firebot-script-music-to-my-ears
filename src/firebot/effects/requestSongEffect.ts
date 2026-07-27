@@ -38,8 +38,6 @@ interface Model {
   userArtistCooldownMinutes: number;
   /** Longest track that may be queued, in seconds. 0 disables. */
   maxTrackLengthSeconds: number;
-  /** Emit verbose search diagnostics for this effect. Off by default. */
-  enableLogging: boolean;
 }
 
 interface Outputs {
@@ -225,18 +223,6 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
       />
       <p class="muted">Longest track that may be queued. 420 is a reasonable 7-minute cap.</p>
     </eos-container>
-    <eos-container header="Troubleshooting" pad-top="true">
-      <label class="control-fb control--checkbox">Enable logging
-        <input type="checkbox" ng-model="effect.enableLogging" />
-        <div class="control__indicator"></div>
-      </label>
-      <p class="muted">
-        When on, writes the Spotify search query, every candidate returned, the total number of
-        matches, and the raw response to the Firebot log — and logs each rejected request with the
-        reason it was turned away. Verbose by design — turn it on to work out why a request matched
-        the wrong track or was refused, then turn it back off.
-      </p>
-    </eos-container>
   `,
   // IMPORTANT: optionsController is stringified and eval'd on the FRONTEND, so it
   // must not reference any bundled import or module variable (that throws e.g.
@@ -254,9 +240,6 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
     } else if ($scope.effect.blockedTerms === undefined) {
       $scope.effect.blockedTerms = "karaoke\ninstrumental\ninst.";
     }
-    if ($scope.effect.enableLogging === undefined) {
-      $scope.effect.enableLogging = false;
-    }
     if ($scope.effect.noRepeatMinutes === undefined) {
       $scope.effect.noRepeatMinutes = 30;
     }
@@ -271,23 +254,19 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
     }
   },
   onTriggerEvent: async ({ effect, trigger }) => {
-    const log = Boolean(effect.enableLogging);
-
-    // Same gate as the search diagnostics: when logging is on, record why a
-    // request was turned away, so a streamer can see the rejection that follows
-    // the search rather than only the search. Emitted at `info` so the checkbox
-    // alone surfaces it, without raising Firebot's global log level.
+    // Same channel as the search diagnostics: record why a request was turned
+    // away, so a streamer reading the debug log sees the rejection that follows
+    // the search rather than only the search. Emitted at `debug` — the session
+    // debug log keeps it whatever Firebot's log level is.
     const reject = (reason: ErrorReason, track?: Track, cooldown = 0, artistName?: string) => {
-      if (log) {
-        logger.info(
-          `Song request rejected [${reason}]: ${JSON.stringify({
-            track: track?.name,
-            artist: artistName ?? track?.artists[0],
-            uri: track?.uri,
-            ...(cooldown ? { retryInSeconds: cooldown } : {}),
-          })}`
-        );
-      }
+      logger.debug(
+        `Song request rejected [${reason}]: ${JSON.stringify({
+          track: track?.name,
+          artist: artistName ?? track?.artists[0],
+          uri: track?.uri,
+          ...(cooldown ? { retryInSeconds: cooldown } : {}),
+        })}`
+      );
       return failure(reason, track, cooldown, artistName);
     };
 
@@ -298,7 +277,7 @@ export const requestSongEffect: Effects.EffectType<Model, unknown, Outputs> = {
 
     let track: Track | undefined;
     try {
-      track = await searchTrack(query, { log });
+      track = await searchTrack(query);
       if (!track) {
         return reject("not-found");
       }

@@ -26,6 +26,12 @@ export interface Params {
    * `parseBlockList` / `findBlock` in `services/moderation.ts`.
    */
   spotifyBlockList: string;
+  /**
+   * Not a setting and never read: Firebot's `button` parameter type carries no
+   * value, and the field exists only so the control can be declared. Typed
+   * `void` because that is the shape `ParametersConfig` maps to a button.
+   */
+  copyDebugLog?: void;
 }
 
 /**

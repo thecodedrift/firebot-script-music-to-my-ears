@@ -1,15 +1,27 @@
 import { Firebot } from "@crowbartools/firebot-custom-scripts-types";
-import { getModules, initModules, logger, setParams } from "./modules";
-import { Params } from "./types/params";
 import {
-  registerSpotifyIntegration,
-  teardownSpotifyIntegration,
-} from "./services/integration";
+  getFirebotVersion,
+  getModules,
+  getParams,
+  initModules,
+  logger,
+  setParams,
+} from "./modules";
+import { Params } from "./types/params";
+import { registerSpotifyIntegration, teardownSpotifyIntegration } from "./services/integration";
+import { clear as clearDebugLog, snapshot } from "./services/debugLog";
 import { clear as clearLedger } from "./services/ledger";
 import { AllEffects } from "./firebot/effects";
+import { namespaced } from "./shared/constants";
 
 // Injected from package.json at build time; falls back outside the webpack build.
 const VERSION = typeof __SCRIPT_VERSION__ !== "undefined" ? __SCRIPT_VERSION__ : "0.0.0";
+
+/** Fired by the "Copy debug log" button on the script configuration page. */
+const COPY_DEBUG_LOG_EVENT = namespaced("copy-debug-log");
+
+/** The id `frontendCommunicator.onAsync` returns, so `stop()` can unregister. */
+let copyDebugLogHandlerId: string | undefined;
 
 const script: Firebot.CustomScript<Params> = {
   getScriptManifest: () => ({
@@ -62,12 +74,42 @@ const script: Firebot.CustomScript<Params> = {
         "artist and track names. Leave blank to block nothing.",
       default: "",
     },
+    // Not a setting: a button, rendered last, that copies the session debug log.
+    // Firebot loads this bundle in a SEPARATE process to render this page and
+    // calls getDefaultParameters with no modules, so nothing here can read the
+    // running script's state — the version is a build-time constant, and the log
+    // itself is fetched by the click, which reaches the running script.
+    copyDebugLog: {
+      type: "button",
+      title: `Debug log (Music to My Ears v${VERSION})`,
+      description:
+        "Copies this Firebot session's Music to My Ears log to your clipboard, including the " +
+        "script and Firebot versions and your settings with the client id and secret left out. " +
+        "Paste it into a bug report so a broken song request can be traced.",
+      tip: "The log is kept in memory only, and is lost when Firebot restarts.",
+      buttonText: "Copy debug log",
+      backendEventName: COPY_DEBUG_LOG_EVENT,
+    },
   }),
 
   run: (runRequest) => {
     const params = runRequest.parameters as Params;
-    initModules(runRequest.modules, params);
-    logger.info("Music to My Ears: starting up");
+    initModules(runRequest.modules, params, runRequest.firebot?.version);
+    logger.info(`Music to My Ears: starting up (v${VERSION})`);
+
+    const { frontendCommunicator } = runRequest.modules;
+    copyDebugLogHandlerId = frontendCommunicator.onAsync(COPY_DEBUG_LOG_EVENT, async () => {
+      // Firebot's own "Copy Debug Info" button works exactly this way: the
+      // backend hands the text to the frontend, which owns the clipboard.
+      frontendCommunicator.send("copy-to-clipboard", {
+        text: snapshot({
+          scriptVersion: VERSION,
+          firebotVersion: getFirebotVersion(),
+          params: getParams(),
+        }),
+        toastMessage: "Music to My Ears debug log copied to clipboard",
+      });
+    });
 
     registerSpotifyIntegration({
       id: params.spotifyClientId,
@@ -87,12 +129,18 @@ const script: Firebot.CustomScript<Params> = {
 
   stop: () => {
     logger.info("Music to My Ears: stopping, tearing down registrations");
-    const { effectManager } = getModules();
+    const { effectManager, frontendCommunicator } = getModules();
     for (const effect of AllEffects) {
       effectManager.unregisterEffect(effect.definition.id);
     }
+    if (copyDebugLogHandlerId) {
+      frontendCommunicator.off(COPY_DEBUG_LOG_EVENT, copyDebugLogHandlerId);
+      copyDebugLogHandlerId = undefined;
+    }
     teardownSpotifyIntegration();
     clearLedger();
+    // Last: the lines above are worth keeping if anything here goes wrong.
+    clearDebugLog();
   },
 };
 
