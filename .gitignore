@@ -30,3 +30,6 @@ Thumbs.db
 
 # Local Claude Code settings (personal; shared settings.json is committed)
 .claude/settings.local.json
+
+# Local git worktrees (e.g. .worktrees/fix-foo)
+.worktrees/
