@@ -23,13 +23,13 @@ token and raises a typed error on non-OK responses.
 The script SHALL maintain exactly two logging channels for Spotify traffic, with distinct redaction
 rules:
 
-1. An **always-on failure-triage** channel, emitted by the API helper when a request fails. It
-   SHALL redact user-content query parameters (`q`, `uri`, `uris`) so the record is safe to share
-   in a public bug report, while retaining the path and structural parameters such as `type` and
-   `limit`.
-2. An **opt-in diagnostics** channel, emitted by callers that the streamer has explicitly enabled.
-   It SHALL NOT redact the query text or the response body, because surfacing exactly those values
-   is its purpose and the streamer has consented by enabling it.
+1. A **failure-triage** channel, emitted by the API helper when a request fails. It SHALL redact
+   user-content query parameters (`q`, `uri`, `uris`) so the record is safe to share in a public
+   bug report, while retaining the path and structural parameters such as `type` and `limit`.
+2. A **detailed diagnostics** channel, emitted by callers for every search attempt. It SHALL NOT
+   redact the query text or the response body, because surfacing exactly those values is its
+   purpose. It SHALL be emitted at `debug`, where the session debug log captures it while Firebot's
+   own log file stays quiet, and it SHALL NOT be gated on any option.
 
 Both channels SHALL be governed by one absolute invariant: neither SHALL ever emit the
 `Authorization` header, the access token, the refresh token, or the client secret.
@@ -40,16 +40,20 @@ Both channels SHALL be governed by one absolute invariant: neither SHALL ever em
 - **AND** a non-2xx response raises a typed error carrying the HTTP status
 
 #### Scenario: Failure triage redacts user content
-- **WHEN** a Spotify request fails and the always-on triage record is written
+- **WHEN** a Spotify request fails and the triage record is written
 - **THEN** the `q`, `uri`, and `uris` parameter values are replaced with `REDACTED`
 - **AND** the request path and the `type` and `limit` parameters are retained
 
-#### Scenario: Opt-in diagnostics retain user content
-- **WHEN** a caller has opt-in diagnostics enabled and logs a search attempt
+#### Scenario: Detailed diagnostics retain user content
+- **WHEN** a search attempt is logged on the detailed diagnostics channel
 - **THEN** the query text and the raw response body are logged unredacted
 
+#### Scenario: Detailed diagnostics are not gated
+- **WHEN** a search attempt is issued
+- **THEN** its diagnostic record is written at `debug` with no option required to enable it
+
 #### Scenario: Credentials never logged on either channel
-- **WHEN** any record is written on either the failure-triage channel or the opt-in diagnostics channel
+- **WHEN** any record is written on either the failure-triage channel or the detailed diagnostics channel
 - **THEN** the record contains no `Authorization` header, access token, refresh token, or client secret
 
 ### Requirement: Configuration Parameters
@@ -98,7 +102,7 @@ rather than a documented guarantee, and is adopted knowingly.
 - **THEN** both resolve to the same artist id
 
 #### Scenario: Artist ids appear in search diagnostics
-- **WHEN** opt-in request diagnostics are enabled
+- **WHEN** a search attempt is logged
 - **THEN** each logged candidate includes its artists' ids
 - **AND** a streamer can determine which artist id a restriction matched
 
