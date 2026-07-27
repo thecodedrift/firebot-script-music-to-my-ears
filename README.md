@@ -55,9 +55,21 @@ yours to design using the effects' outputs.
 | Setting                        | Description                                                       |
 | ------------------------------ | ----------------------------------------------------------------- |
 | **Spotify Client ID / Secret** | From your Spotify app. Changing these requires a Firebot restart. |
+| **Copy debug log**             | Copies this session's log to your clipboard for a bug report.     |
 
 Everything else — moderation filters and the request restrictions below — is configured **per
 Request Song effect** (so a clean `!sr` and a looser one can differ), not on this page.
+
+### Reporting a problem
+
+The script keeps its own log of everything it does during the Firebot session — every search, every
+candidate Spotify returned, and the reason behind every refused request — whatever your Firebot log
+level is set to. Nothing needs turning on first.
+
+When a request goes wrong, open the script settings page and click **Copy debug log**, then paste
+the result into your bug report. It carries the script and Firebot versions and your settings, with
+the client id and secret left out. The log lives in memory only, so copy it before restarting
+Firebot.
 
 ### Restrictions (per Request Song effect)
 

@@ -544,15 +544,15 @@ describe("searchTrack", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("bypasses search entirely for a track id, and logs nothing new", async () => {
+  it("bypasses search entirely for a track id, and logs no attempt record", async () => {
     const id = "1O9XsjLUaxsYCRh9vyF8xS";
     mockFetch.mockResolvedValueOnce(okResponse(makeTrack()));
 
-    const track = await searchTrack(`spotify:track:${id}`, { log: true });
+    const track = await searchTrack(`spotify:track:${id}`);
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(String(mockFetch.mock.calls[0][0])).toContain(`/tracks/${id}`);
-    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.debug).not.toHaveBeenCalled();
     expect(track?.name).toBe("Seven Dollars");
   });
 
@@ -632,22 +632,25 @@ describe("searchTrack", () => {
     });
   });
 
-  describe("opt-in diagnostics", () => {
-    it("emits nothing when logging is off", async () => {
+  describe("search diagnostics", () => {
+    it("needs no opting in, and stays off the info channel", async () => {
+      // These used to be gated behind a per-effect checkbox and shouted at
+      // `info`; the session debug log made both unnecessary.
       mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack()])));
 
       await searchTrack("seven dollars by happy birthday mr baskets");
 
+      expect(logger.debug).toHaveBeenCalledTimes(1);
       expect(logger.info).not.toHaveBeenCalled();
     });
 
     it("emits one record for a validated filtered search", async () => {
       mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack()], 412)));
 
-      await searchTrack("seven dollars by happy birthday mr baskets", { log: true });
+      await searchTrack("seven dollars by happy birthday mr baskets");
 
-      expect(logger.info).toHaveBeenCalledTimes(1);
-      const record = JSON.parse(String(logger.info.mock.calls[0][0]).replace(/^[^{]*/, ""));
+      expect(logger.debug).toHaveBeenCalledTimes(1);
+      const record = JSON.parse(String(logger.debug.mock.calls[0][0]).replace(/^[^{]*/, ""));
       expect(record.attempt).toBe("filtered");
       expect(record.validation).toEqual({ ok: true });
       expect(record.selected).toBe("spotify:track:aaaaaaaaaaaaaaaaaaaaaa");
@@ -656,25 +659,31 @@ describe("searchTrack", () => {
     it("reports total matches distinctly from the returned page size", async () => {
       mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack()], 412)));
 
-      await searchTrack("seven dollars by happy birthday mr baskets", { log: true });
+      await searchTrack("seven dollars by happy birthday mr baskets");
 
-      const record = JSON.parse(String(logger.info.mock.calls[0][0]).replace(/^[^{]*/, ""));
+      const record = JSON.parse(String(logger.debug.mock.calls[0][0]).replace(/^[^{]*/, ""));
       expect(record.totalMatches).toBe(412);
       expect(record.returnedItems).toBe(1);
     });
 
     it("emits both attempts on fallback, with the failing reason", async () => {
-      const wrong = makeTrack({ name: "Stand", artists: [{ id: "artist-ben-e-king", name: "Ben E. King" }] });
-      const right = makeTrack({ name: "Stand By Me", artists: [{ id: "artist-ben-e-king", name: "Ben E. King" }] });
+      const wrong = makeTrack({
+        name: "Stand",
+        artists: [{ id: "artist-ben-e-king", name: "Ben E. King" }],
+      });
+      const right = makeTrack({
+        name: "Stand By Me",
+        artists: [{ id: "artist-ben-e-king", name: "Ben E. King" }],
+      });
       mockFetch
         .mockResolvedValueOnce(okResponse(searchBody([wrong])))
         .mockResolvedValueOnce(okResponse(searchBody([right])));
 
-      await searchTrack("Stand By Me", { log: true });
+      await searchTrack("Stand By Me");
 
-      expect(logger.info).toHaveBeenCalledTimes(2);
-      const first = JSON.parse(String(logger.info.mock.calls[0][0]).replace(/^[^{]*/, ""));
-      const second = JSON.parse(String(logger.info.mock.calls[1][0]).replace(/^[^{]*/, ""));
+      expect(logger.debug).toHaveBeenCalledTimes(2);
+      const first = JSON.parse(String(logger.debug.mock.calls[0][0]).replace(/^[^{]*/, ""));
+      const second = JSON.parse(String(logger.debug.mock.calls[1][0]).replace(/^[^{]*/, ""));
       expect(first.attempt).toBe("filtered");
       expect(first.validation.ok).toBe(false);
       expect(first.validation.reason).toContain("me");
@@ -686,9 +695,9 @@ describe("searchTrack", () => {
       const other = makeTrack({ uri: "spotify:track:bbbbbbbbbbbbbbbbbbbbbb", name: "Decoy" });
       mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack(), other], 2)));
 
-      await searchTrack("seven dollars by happy birthday mr baskets", { log: true });
+      await searchTrack("seven dollars by happy birthday mr baskets");
 
-      const record = JSON.parse(String(logger.info.mock.calls[0][0]).replace(/^[^{]*/, ""));
+      const record = JSON.parse(String(logger.debug.mock.calls[0][0]).replace(/^[^{]*/, ""));
       expect(record.candidates).toHaveLength(2);
       expect(record.candidates[1]).toMatchObject({ name: "Decoy", explicit: false });
       expect(record.rawResponse.tracks.items).toHaveLength(2);
@@ -697,9 +706,9 @@ describe("searchTrack", () => {
     it("never logs the bearer token", async () => {
       mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack()])));
 
-      await searchTrack("seven dollars by happy birthday mr baskets", { log: true });
+      await searchTrack("seven dollars by happy birthday mr baskets");
 
-      const logged = logger.info.mock.calls.map((call) => String(call[0])).join("\n");
+      const logged = logger.debug.mock.calls.map((call) => String(call[0])).join("\n");
       expect(logged).not.toContain("secret-token-value");
       expect(logged).not.toContain("Authorization");
     });
@@ -708,9 +717,9 @@ describe("searchTrack", () => {
       // Pretty-printed JSON drowns the Firebot log in newlines; keep it compact.
       mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack(), makeTrack()], 2)));
 
-      await searchTrack("seven dollars by happy birthday mr baskets", { log: true });
+      await searchTrack("seven dollars by happy birthday mr baskets");
 
-      expect(String(logger.info.mock.calls[0][0])).not.toContain("\n");
+      expect(String(logger.debug.mock.calls[0][0])).not.toContain("\n");
     });
   });
 });
