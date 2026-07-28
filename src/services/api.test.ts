@@ -1,4 +1,5 @@
 import {
+  contentTokens,
   market,
   normalizeQuery,
   NotPlayableError,
@@ -356,6 +357,34 @@ function makeTrack(over: Partial<SpotifyTrack> = {}): SpotifyTrack {
   };
 }
 
+describe("contentTokens", () => {
+  it("drops function words", () => {
+    expect([...contentTokens(tokenize("walk the dinosaur by ninja sex party"))].sort()).toEqual([
+      "dinosaur",
+      "ninja",
+      "party",
+      "sex",
+      "walk",
+    ]);
+  });
+
+  it("keeps pronouns, which carry real signal in titles", () => {
+    // `Stand By Me`, `Call Me Maybe` — dropping these would reject real matches.
+    expect(contentTokens(tokenize("stand by me")).has("me")).toBe(true);
+    expect(contentTokens(tokenize("call me maybe")).has("me")).toBe(true);
+  });
+
+  it("returns nothing for a query that is only function words", () => {
+    // `The The` is a band; the caller falls back to any-token overlap here.
+    expect(contentTokens(tokenize("the the")).size).toBe(0);
+    expect(contentTokens(tokenize("of and the")).size).toBe(0);
+  });
+
+  it("leaves a query with no function words untouched", () => {
+    expect([...contentTokens(tokenize("seven dollars"))].sort()).toEqual(["dollars", "seven"]);
+  });
+});
+
 describe("validateMatch", () => {
   it("passes when title and artist tokens are all present", () => {
     expect(validateMatch(makeTrack(), "seven dollars", "happy birthday mr baskets")).toEqual({
@@ -625,6 +654,55 @@ describe("searchTrack", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(String(mockFetch.mock.calls[0][0])).toContain(`/tracks/${id}`);
     expect(track?.name).toBe("Seven Dollars");
+  });
+
+  describe("content-token relevance floor", () => {
+    it("rejects a candidate whose only shared token is a function word", async () => {
+      // The reported bug: `The Decision` answered a request for a dinosaur song
+      // on the strength of the word `the`.
+      const decoy = makeTrack({ name: "The Decision", artists: [{ id: "artist-x", name: "Someone" }] });
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([decoy])));
+
+      await expect(searchTrack("walk the dinosaur")).resolves.toBeUndefined();
+    });
+
+    it("accepts a candidate that shares a content token", async () => {
+      const real = makeTrack({ name: "Dinosaur", artists: [{ id: "artist-x", name: "Someone" }] });
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([real])));
+
+      const track = await searchTrack("walk the dinosaur");
+
+      expect(track?.name).toBe("Dinosaur");
+    });
+
+    it("keeps the any-token floor when the query is all function words", async () => {
+      // `The The` is a band; requiring a content token would make it unfindable.
+      const band = makeTrack({ name: "This Is The Day", artists: [{ id: "artist-thethe", name: "The The" }] });
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([band])));
+
+      const track = await searchTrack("the the");
+
+      expect(track?.name).toBe("This Is The Day");
+    });
+
+    it("treats a pronoun as a content token", async () => {
+      const track = makeTrack({ name: "Me Myself", artists: [{ id: "artist-x", name: "Someone" }] });
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([track])));
+
+      await expect(searchTrack("hold me")).resolves.toMatchObject({ name: "Me Myself" });
+    });
+
+    it("still ranks on every query token, function words included", async () => {
+      // Ranking chooses BETWEEN related candidates, so weak tokens still help
+      // there; only the floor ignores them.
+      const weaker = makeTrack({ uri: "spotify:track:bbbbbbbbbbbbbbbbbbbbbb", name: "Walk" });
+      const stronger = makeTrack({ uri: "spotify:track:cccccccccccccccccccccc", name: "Walk The" });
+      mockFetch.mockResolvedValueOnce(okResponse(searchBody([weaker, stronger])));
+
+      const track = await searchTrack("walk the night");
+
+      expect(track?.uri).toBe("spotify:track:cccccccccccccccccccccc");
+    });
   });
 
   it("bypasses search entirely for a track id, and logs no attempt record", async () => {
