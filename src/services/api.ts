@@ -266,7 +266,8 @@ export async function getTrack(id: string): Promise<Track | undefined> {
 
 /**
  * A leaked command trigger at the very front of a query: `!` + a letter, then
- * letters or digits, then whitespace and the rest of the query.
+ * letters or digits, then any punctuation stuck to it, then whitespace and the
+ * rest of the query.
  *
  * Every part of this is load-bearing. Anchoring to the start is what keeps
  * `Hello! by Someone` intact, since a `!` anywhere else belongs to the title.
@@ -275,8 +276,14 @@ export async function getTrack(id: string): Promise<Track | undefined> {
  * otherwise be mangled into a query starting with a bare dash. And requiring
  * trailing text means `!sr` on its own is left alone rather than turned into an
  * empty search.
+ *
+ * The trailing punctuation class covers `!sr, Toxic` and `!sr: Toxic` — typing
+ * the trigger like an address is a habit, and without it the comma carries the
+ * whole junk token into the search. It stops at the whitespace: the separator
+ * is still a space, so a hyphenated first word (`!go-go dancers`) is one token
+ * and is left alone rather than half-eaten.
  */
-const COMMAND_PREFIX_RE = /^!\p{L}[\p{L}\p{N}]*\s+(?=\S)/u;
+const COMMAND_PREFIX_RE = /^!\p{L}[\p{L}\p{N}]*[^\p{L}\p{N}\s]*\s+(?=\S)/u;
 
 /**
  * Removes a leaked command trigger, e.g. `!sr Toxic by Britney Spears`.

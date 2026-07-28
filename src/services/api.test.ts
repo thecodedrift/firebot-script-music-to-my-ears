@@ -195,6 +195,27 @@ describe("stripCommandPrefix", () => {
     expect(stripCommandPrefix("!sr2 Toxic")).toBe("Toxic");
   });
 
+  it("removes a trigger typed with trailing punctuation", () => {
+    // `!sr, song` and `!sr: song` are a habit; without this the comma drags the
+    // whole junk token into the search.
+    expect(stripCommandPrefix("!sr, Toxic by Britney Spears")).toBe("Toxic by Britney Spears");
+    expect(stripCommandPrefix("!sr: Toxic")).toBe("Toxic");
+  });
+
+  it("leaves a spaced-off separator behind, harmlessly", () => {
+    // `!sr - Toxic` keeps the dash: it is its own token, not punctuation stuck
+    // to the trigger. Tokenizing strips it before any comparison, so the search
+    // is unaffected and chasing it would only widen a deliberately narrow rule.
+    expect(stripCommandPrefix("!sr - Toxic")).toBe("- Toxic");
+    expect([...tokenize("- Toxic")]).toEqual(["toxic"]);
+  });
+
+  it("stops at the whitespace, so a hyphenated first word survives", () => {
+    // `!go-go` is one token: eating half of it would be worse than not trying.
+    expect(stripCommandPrefix("!go-go dancers")).toBe("!go-go dancers");
+    expect(stripCommandPrefix("!sr,Toxic")).toBe("!sr,Toxic");
+  });
+
   it("leaves a `!` that is not at the front alone", () => {
     // The bug this rule must not become: `!` inside a query is part of the title.
     expect(stripCommandPrefix("Hello! by Someone")).toBe("Hello! by Someone");
@@ -586,6 +607,13 @@ describe("searchTrack", () => {
     const sent = new URL(String(mockFetch.mock.calls[0][0])).searchParams.get("q");
     expect(sent).toBe('track:"seven dollars" artist:"happy birthday mr baskets"');
     expect(sent).not.toContain("!sr");
+    // The trace log is how a surprising match is tied back to the text actually
+    // searched, so assert it rather than letting a refactor drop it silently.
+    const traced = logger.debug.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.startsWith("Stripped a leaked command trigger"));
+    expect(traced).toHaveLength(1);
+    expect(traced[0]).toContain('"seven dollars by happy birthday mr baskets"');
   });
 
   it("resolves a track link that carries a leaked trigger, without searching", async () => {
