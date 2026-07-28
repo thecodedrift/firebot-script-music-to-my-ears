@@ -1,5 +1,40 @@
 # firebot-music-to-my-ears
 
+## 2.1.1
+
+### Patch Changes
+
+- b920c2a: Stop a song request from queueing an unrelated track that happens to share a common word. The raw
+  search fallback accepted any candidate sharing at least one token with the request, and every token
+  counted equally — so a shared `the` was enough. A request for `walk the dinosaur by ninja sex party`
+  could come back with **"The Decision"**.
+
+  The floor now requires a shared **content token**: a word that is not an article, conjunction,
+  preposition, or feature marker. A candidate whose only commonality is a function word is reported as
+  not-found instead of queued. Pronouns still count (`Stand By Me`, `Call Me Maybe`), and a query made
+  entirely of function words — `The The`, `You And Me` — keeps the old behavior so it stays findable.
+
+  Ranking is unchanged: it still weighs every token, because choosing between related candidates is a
+  different question from deciding whether a candidate is related at all.
+
+- 0aca4b4: Strip a leaked command trigger from a song request. `!sr Toxic by Britney Spears` used to search
+  Spotify for `track:"!sr Toxic"`, which matches nothing — so every request carrying a trigger burned
+  its first search and fell back to a raw query that still contained the junk token, leaving the match
+  to Spotify's ranking. The trigger is now removed first, so the request matches on the real title and
+  costs one search instead of two. `$arg[all]` is safe to wire straight into the effect.
+
+  The rule is deliberately narrow: only the first token, only when a letter follows the `!` (so the
+  band `!!!` is untouched), and never when nothing would be left to search for.
+
+- aa2806e: Fix bug reports arriving with no logs. The script now keeps its own log of the Firebot session —
+  every search, candidate, and refused request, at every level and whatever your Firebot log level is
+  — and the script settings page has a **Copy debug log** button that puts the lot on your clipboard,
+  prefixed with the script and Firebot versions and your settings (client id and secret left out).
+
+  The per-effect **Enable logging** checkbox is gone with it. It defaulted to off, which meant the
+  records were missing from exactly the sessions that needed them; those diagnostics are now always
+  recorded, and they moved from `info` to `debug`, so Firebot's own log file gets quieter.
+
 ## 2.1.0
 
 ### Minor Changes
