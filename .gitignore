@@ -1,5 +1,5 @@
 # Dependencies
-node_modules/
+node_modules
 
 # Build output (built in CI and attached to GitHub Releases, not committed)
 dist/
