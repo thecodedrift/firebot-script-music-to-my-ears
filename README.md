@@ -98,6 +98,9 @@ Wire the effects into your own command. A typical song-request command (`!sr`):
 2. **Request Song (Spotify)** effect:
    - **Search query**: `$arg[all]` (or `$redemptionMessage` for a reward). Also accepts a
      Spotify track link (or `spotify:track:` URI / id), which queues that exact track.
+     A command trigger that leaks into the text (`!sr Toxic by Britney Spears`, which happens
+     with a raw message or a viewer who repeats the trigger) is stripped, so you can wire the
+     whole message straight in.
    - Adjust the blocked-terms list / explicit toggle as desired
 3. **Branch on the outputs** (effect outputs are read with `$effectOutput[name]`):
    - When `$effectOutput[success]` is `true` → **Chat** effect:

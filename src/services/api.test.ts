@@ -9,6 +9,7 @@ import {
   selectBest,
   spotifyFetch,
   SpotifyApiError,
+  stripCommandPrefix,
   toErrorReason,
   tokenize,
   validateMatch,
@@ -182,6 +183,39 @@ describe("spotifyFetch error handling", () => {
     expect(logged).toContain("q=REDACTED");
     expect(logged).not.toContain("secret-token-value");
     expect(logged).not.toContain("daft");
+  });
+});
+
+describe("stripCommandPrefix", () => {
+  it("removes a leaked trigger from the front", () => {
+    expect(stripCommandPrefix("!sr Walk The Dinosaur by Ninja Sex Party")).toBe(
+      "Walk The Dinosaur by Ninja Sex Party"
+    );
+    expect(stripCommandPrefix("!songrequest Toxic")).toBe("Toxic");
+    expect(stripCommandPrefix("!sr2 Toxic")).toBe("Toxic");
+  });
+
+  it("leaves a `!` that is not at the front alone", () => {
+    // The bug this rule must not become: `!` inside a query is part of the title.
+    expect(stripCommandPrefix("Hello! by Someone")).toBe("Hello! by Someone");
+    expect(stripCommandPrefix("Panic! At The Disco")).toBe("Panic! At The Disco");
+    expect(stripCommandPrefix("Bohemian Rhapsody !sr")).toBe("Bohemian Rhapsody !sr");
+  });
+
+  it("leaves the band `!!!` alone", () => {
+    // Three bangs is a real artist name; the letter requirement is what saves it.
+    expect(stripCommandPrefix("!!! - Louden Up Now")).toBe("!!! - Louden Up Now");
+    expect(stripCommandPrefix("!!!")).toBe("!!!");
+  });
+
+  it("leaves a query that is only a trigger alone", () => {
+    // Stripping would leave an empty search; the not-found path is the better answer.
+    expect(stripCommandPrefix("!sr")).toBe("!sr");
+    expect(stripCommandPrefix("!sr   ")).toBe("!sr   ");
+  });
+
+  it("passes an ordinary query through untouched", () => {
+    expect(stripCommandPrefix("Toxic by Britney Spears")).toBe("Toxic by Britney Spears");
   });
 });
 
@@ -542,6 +576,27 @@ describe("searchTrack", () => {
 
     await expect(searchTrack("Stand By Me")).resolves.toBeUndefined();
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("searches the real title when a command trigger leaked into the query", async () => {
+    mockFetch.mockResolvedValueOnce(okResponse(searchBody([makeTrack()])));
+
+    await searchTrack("!sr seven dollars by happy birthday mr baskets");
+
+    const sent = new URL(String(mockFetch.mock.calls[0][0])).searchParams.get("q");
+    expect(sent).toBe('track:"seven dollars" artist:"happy birthday mr baskets"');
+    expect(sent).not.toContain("!sr");
+  });
+
+  it("resolves a track link that carries a leaked trigger, without searching", async () => {
+    const id = "1O9XsjLUaxsYCRh9vyF8xS";
+    mockFetch.mockResolvedValueOnce(okResponse(makeTrack()));
+
+    const track = await searchTrack(`!sr https://open.spotify.com/track/${id}`);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(String(mockFetch.mock.calls[0][0])).toContain(`/tracks/${id}`);
+    expect(track?.name).toBe("Seven Dollars");
   });
 
   it("bypasses search entirely for a track id, and logs no attempt record", async () => {

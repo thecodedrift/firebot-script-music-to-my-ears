@@ -264,6 +264,38 @@ export async function getTrack(id: string): Promise<Track | undefined> {
   return toTrack(data);
 }
 
+/**
+ * A leaked command trigger at the very front of a query: `!` + a letter, then
+ * letters or digits, then whitespace and the rest of the query.
+ *
+ * Every part of this is load-bearing. Anchoring to the start is what keeps
+ * `Hello! by Someone` intact, since a `!` anywhere else belongs to the title.
+ * Requiring a LETTER after the bang is what protects the band `!!!`, whose name
+ * is exactly three bangs and whose albums (`!!! - Louden Up Now`) would
+ * otherwise be mangled into a query starting with a bare dash. And requiring
+ * trailing text means `!sr` on its own is left alone rather than turned into an
+ * empty search.
+ */
+const COMMAND_PREFIX_RE = /^!\p{L}[\p{L}\p{N}]*\s+(?=\S)/u;
+
+/**
+ * Removes a leaked command trigger, e.g. `!sr Toxic by Britney Spears`.
+ *
+ * The trigger leaks whenever the streamer wires the raw message into the effect
+ * — `$arg[all]` on a command that passes everything through, or a viewer who
+ * types `!sr` inside a channel-point reward's text. Left in place it lands
+ * INSIDE the quoted title filter (`track:"!sr Toxic"`), which Spotify matches
+ * literally and answers with nothing, so the request wastes its filtered
+ * attempt and falls through to a raw search that still carries the junk token.
+ *
+ * We cannot know which triggers the streamer configured — the script registers
+ * no commands and is not told what invoked the effect — so this is a rule about
+ * shape, kept deliberately narrow.
+ */
+export function stripCommandPrefix(query: string): string {
+  return query.replace(COMMAND_PREFIX_RE, "");
+}
+
 /** Spotify query filters we recognize; a query using one is passed through as-is. */
 const FIELD_FILTER_RE = /\b(?:track|artist|album|year|genre|isrc|upc|tag):/i;
 
@@ -540,7 +572,16 @@ function logAttempt(
  * raw query. At most two searches are issued. Returns undefined when nothing
  * matches.
  */
-export async function searchTrack(query: string): Promise<Track | undefined> {
+export async function searchTrack(original: string): Promise<Track | undefined> {
+  // Above the id check on purpose: `!sr <track link>` is a direct lookup, and
+  // only sees that it is one once the trigger is gone.
+  const query = stripCommandPrefix(original);
+  if (query !== original) {
+    logger.debug(
+      `Stripped a leaked command trigger from the request; searching ${JSON.stringify(query)}`
+    );
+  }
+
   const id = parseTrackId(query);
   if (id) {
     return getTrack(id);
