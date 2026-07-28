@@ -269,7 +269,9 @@ with the greatest **token overlap** with the query it issued: the number of dist
 (normalized as above) that appear in the union of the candidate's track-name tokens and its
 artists'-name tokens. Ties SHALL be broken by Spotify's original result order, so the earliest of
 the equally-scoring candidates is chosen. On the filtered path the query tokens are the parsed
-title and artist tokens; on the raw path they are the tokens of the raw free-text query.
+title and artist tokens; on the raw path they are the tokens of the raw free-text query. Ranking
+SHALL weigh every query token equally, function words included, because it is choosing between
+candidates that already relate to the query.
 
 Selection SHALL exclude candidates Spotify marks unplayable (`is_playable === false`) before
 ranking. `is_playable` is only populated when a `market` is in effect (see the Configuration
@@ -277,9 +279,22 @@ Parameters requirement); when none is set the field is absent, nothing is exclud
 unchanged. When every returned candidate is excluded as unplayable, the search SHALL resolve as
 though it returned nothing — the filtered path falls through and the raw path outputs `not-found`.
 
-The raw fallback SHALL apply a **zero-overlap floor**: when the best-overlap candidate shares no
-query token — including when the raw search returns no candidates at all — the effect SHALL treat
-the raw search as finding nothing and output `not-found`, rather than queuing an irrelevant track.
+The raw fallback SHALL apply a **content-token floor**: the selected candidate SHALL share at least
+one *content token* with the query, where a content token is a query token that is not an English
+function word (articles, conjunctions, prepositions, and the feature markers `feat`, `ft`,
+`featuring`, `vs`). When it shares none — including when the raw search returns no candidates at
+all — the effect SHALL treat the raw search as finding nothing and output `not-found`, rather than
+queuing an irrelevant track. The floor asks whether a candidate relates to the request at all, and a
+shared function word is no evidence that it does.
+
+The list of function words SHALL be short and closed, covering only words that are meaningless as a
+search term on their own. Pronouns SHALL NOT be treated as function words, because they carry real
+signal in titles (`Stand By Me`, `Call Me Maybe`).
+
+When a query consists entirely of function words (`The The`, `You And Me`), there is no content
+token to require, and the floor SHALL fall back to requiring any shared token, so that such a
+request remains findable.
+
 The raw result is otherwise accepted without the filtered path's title/artist containment
 validation; only the floor gates it.
 
@@ -315,26 +330,25 @@ validation; only the floor gates it.
 - **WHEN** the raw fallback search returns only candidates that share no token with the query
 - **THEN** the effect selects none of them and outputs `success: false` and `errorReason: not-found`
 
-#### Scenario: Ties keep Spotify order
-- **WHEN** two raw candidates have equal token overlap with the query
-- **THEN** the effect selects the one Spotify returned first
+#### Scenario: A shared function word does not clear the floor
+- **WHEN** the raw fallback for `walk the dinosaur by ninja sex party` returns a candidate named `The Decision`, whose only shared token is `the`
+- **THEN** the candidate is rejected and the effect outputs `errorReason: not-found`
 
-#### Scenario: Unplayable candidates are excluded when a market is in effect
-- **WHEN** a Country of Play code is set and the highest-overlap candidate is marked `is_playable: false` while a lower-overlap candidate is playable
-- **THEN** the effect selects the playable candidate, skipping the unplayable one
+#### Scenario: A shared content word clears the floor
+- **WHEN** the raw fallback for `walk the dinosaur by ninja sex party` returns a candidate whose name shares the token `dinosaur`
+- **THEN** the candidate is accepted, because `dinosaur` is a content token
 
-#### Scenario: All candidates unplayable resolves to not-found
-- **WHEN** a Country of Play code is set and every returned candidate is marked `is_playable: false`
-- **THEN** the raw path selects none of them and outputs `success: false` and `errorReason: not-found`
+#### Scenario: An all-function-word query keeps the any-token floor
+- **WHEN** the raw fallback for `the the` returns a candidate whose only shared token is `the`
+- **THEN** the candidate is accepted, because the query has no content token to require
 
-#### Scenario: Fallback also finds nothing
-- **WHEN** the filtered search fails validation and the raw fallback search returns no track
-- **THEN** the effect outputs `success: false` and `errorReason: not-found`
+#### Scenario: Pronouns are content tokens
+- **WHEN** the raw fallback for `stand by me` returns a candidate sharing only the token `me`
+- **THEN** the candidate is accepted, because `me` is not treated as a function word
 
-#### Scenario: Unsplit query issues one search
-- **WHEN** no split applies
-- **THEN** exactly one search is issued, with the raw query
-- **AND** the best token-overlap candidate is selected, subject to the zero-overlap floor
+#### Scenario: Ranking still counts function words
+- **WHEN** two candidates are ranked for the raw query `stand by me`, one sharing `stand` and `by` and one sharing `stand` alone
+- **THEN** the candidate sharing two tokens is selected, because ranking weighs every query token equally
 
 ### Requirement: Always-On Request Diagnostics
 The Request Song effect SHALL log, for each search attempt it issues, a record containing: the

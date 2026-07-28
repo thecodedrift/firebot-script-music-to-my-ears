@@ -334,6 +334,60 @@ export function tokenize(text: string): Set<string> {
 }
 
 /**
+ * Words that carry no discriminating signal in a music query: articles,
+ * conjunctions, prepositions, and the feature markers.
+ *
+ * Short and closed on purpose. Every word here is a word that can no longer, on
+ * its own, keep a request alive (see {@link contentTokens}), so the bar for
+ * adding one is that it is genuinely meaningless as a search term.
+ *
+ * Pronouns are deliberately absent. `me`, `you`, and `my` carry real signal in
+ * titles — `Stand By Me`, `Call Me Maybe` — and treating them as noise would
+ * reject matches that should stand.
+ */
+const FUNCTION_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "as",
+  "at",
+  "but",
+  "by",
+  "feat",
+  "featuring",
+  "for",
+  "from",
+  "ft",
+  "in",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "vs",
+  "with",
+]);
+
+/**
+ * The query tokens that actually say what was asked for.
+ *
+ * Used only by the raw fallback's relevance floor, never by ranking. The two ask
+ * different questions: ranking chooses between candidates that already relate to
+ * the query, and every token helps there; the floor asks whether a candidate
+ * relates to the request *at all*, and a shared `the` is no evidence that it
+ * does. Weighting content tokens during ranking would break the `Stand By Me`
+ * recovery, where `Stand` and `Stand By Me` would tie on `stand` alone and
+ * Spotify's order would decide.
+ *
+ * Returns an empty set for a query that is nothing but function words (`The
+ * The`, `You And Me`); the caller falls back to any-token overlap there, since
+ * requiring a content token would make such a request unfindable.
+ */
+export function contentTokens(tokens: Set<string>): Set<string> {
+  return new Set([...tokens].filter((token) => !FUNCTION_WORDS.has(token)));
+}
+
+/**
  * Splits `<title> <sep> <artist>` when exactly one separator is present.
  *
  * A single `by` wins outright, even when the query also contains ` - `. That is
@@ -622,10 +676,18 @@ export async function searchTrack(original: string): Promise<Track | undefined> 
   const attempt = await runSearch(query, rawTokens);
   const { selected } = attempt;
   // Relevance floor: the raw fallback has no parsed title/artist to validate
-  // against, but a result that shares no token at all with the query is not a
+  // against, but a result that shares nothing meaningful with the query is not a
   // match — accepting one is exactly how a fuzzy raw search once queued a wholly
   // unrelated track. Below the floor we report nothing found rather than queue it.
-  const matched = selected !== undefined && overlapScore(selected, rawTokens) > 0;
+  //
+  // Measured on CONTENT tokens, not all of them. Counting every token equally is
+  // what let `The Decision` answer a request for `walk the dinosaur by ninja sex
+  // party` — it shared `the`, scored 1, and cleared a gate meant to stop exactly
+  // that. A query that is nothing but function words has no content token to
+  // require, so it keeps the any-token floor and stays findable.
+  const floorTokens = contentTokens(rawTokens);
+  const matched =
+    selected !== undefined && overlapScore(selected, floorTokens.size ? floorTokens : rawTokens) > 0;
   logAttempt(
     "raw",
     query,
@@ -634,7 +696,9 @@ export async function searchTrack(original: string): Promise<Track | undefined> 
       ? { ok: true }
       : {
           ok: false,
-          reason: selected ? "no candidate shared a query token" : "raw search returned no tracks",
+          reason: selected
+            ? "no candidate shared a content token with the query"
+            : "raw search returned no tracks",
         }
   );
   if (!matched || selected === undefined) {
