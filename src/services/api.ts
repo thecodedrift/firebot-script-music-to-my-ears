@@ -687,7 +687,8 @@ export async function searchTrack(original: string): Promise<Track | undefined> 
   // require, so it keeps the any-token floor and stays findable.
   const floorTokens = contentTokens(rawTokens);
   const matched =
-    selected !== undefined && overlapScore(selected, floorTokens.size ? floorTokens : rawTokens) > 0;
+    selected !== undefined &&
+    overlapScore(selected, floorTokens.size ? floorTokens : rawTokens) > 0;
   logAttempt(
     "raw",
     query,

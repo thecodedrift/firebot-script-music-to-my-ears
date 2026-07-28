@@ -76,6 +76,27 @@ validation; only the floor gates it.
 - **WHEN** the raw fallback search returns only candidates that share no token with the query
 - **THEN** the effect selects none of them and outputs `success: false` and `errorReason: not-found`
 
+#### Scenario: Ties keep Spotify order
+- **WHEN** two raw candidates have equal token overlap with the query
+- **THEN** the effect selects the one Spotify returned first
+
+#### Scenario: Unplayable candidates are excluded when a market is in effect
+- **WHEN** a Country of Play code is set and the highest-overlap candidate is marked `is_playable: false` while a lower-overlap candidate is playable
+- **THEN** the effect selects the playable candidate, skipping the unplayable one
+
+#### Scenario: All candidates unplayable resolves to not-found
+- **WHEN** a Country of Play code is set and every returned candidate is marked `is_playable: false`
+- **THEN** the raw path selects none of them and outputs `success: false` and `errorReason: not-found`
+
+#### Scenario: Fallback also finds nothing
+- **WHEN** the filtered search fails validation and the raw fallback search returns no track
+- **THEN** the effect outputs `success: false` and `errorReason: not-found`
+
+#### Scenario: Unsplit query issues one search
+- **WHEN** no split applies
+- **THEN** exactly one search is issued, with the raw query
+- **AND** the best token-overlap candidate is selected, subject to the content-token floor
+
 #### Scenario: A shared function word does not clear the floor
 - **WHEN** the raw fallback for `walk the dinosaur by ninja sex party` returns a candidate named `The Decision`, whose only shared token is `the`
 - **THEN** the candidate is rejected and the effect outputs `errorReason: not-found`
