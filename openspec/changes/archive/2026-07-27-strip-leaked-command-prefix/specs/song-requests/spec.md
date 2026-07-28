@@ -4,7 +4,9 @@
 The Request Song effect SHALL strip a leaked command trigger from the front of a query, before
 that query is examined for a track link and before it is normalized into field filters. A leaked
 trigger is the **first** whitespace-delimited token when it consists of `!` followed by a letter
-and then any number of letters or digits — `!sr`, `!songrequest`, `!request2`.
+and then any number of letters or digits — `!sr`, `!songrequest`, `!request2` — together with any
+punctuation stuck to the end of that token, so that `!sr, Toxic` and `!sr: Toxic` are recognized
+too.
 
 The rule SHALL be narrow in three specific ways. Only the first token SHALL be considered, because
 a `!` later in a query belongs to the title. The character after the `!` SHALL be required to be a
@@ -27,6 +29,14 @@ searched, so a surprising match can be traced to the text actually sent to Spoti
 - **WHEN** the query is `!sr https://open.spotify.com/track/1O9XsjLUaxsYCRh9vyF8xS`
 - **THEN** the track is resolved by direct lookup of that id
 - **AND** no search is issued
+
+#### Scenario: Trailing punctuation on the trigger is stripped with it
+- **WHEN** the query is `!sr, Toxic by Britney Spears`
+- **THEN** the comma is removed along with the trigger, and the search is issued for `Toxic by Britney Spears`
+
+#### Scenario: The separator remains whitespace
+- **WHEN** the query is `!go-go dancers`, whose first token is hyphenated rather than a trigger followed by punctuation
+- **THEN** nothing is stripped, because no whitespace follows the punctuation
 
 #### Scenario: Only the leading token is stripped
 - **WHEN** the query is `Hello! by Someone` or `Panic! At The Disco`
