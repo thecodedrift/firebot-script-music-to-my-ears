@@ -5,7 +5,8 @@ type FrontendHandler = () => Promise<void>;
 
 function makeHarness() {
   const registered = new Map<string, unknown>();
-  const handlers = new Map<string, FrontendHandler>();
+  const handlers = new Map<string, { id: string; handler: FrontendHandler }>();
+  const offCalls: Array<{ event: string; id: string }> = [];
   const sent: Array<{ event: string; data: unknown }> = [];
   const modules = {
     logger: { debug() {}, info() {}, warn() {}, error() {} },
@@ -21,14 +22,24 @@ function makeHarness() {
     },
     frontendCommunicator: {
       onAsync: (event: string, handler: FrontendHandler) => {
-        handlers.set(event, handler);
-        return `handler-id-for-${event}`;
+        const id = `handler-id-for-${event}`;
+        handlers.set(event, { id, handler });
+        return id;
       },
-      off: (event: string) => handlers.delete(event),
+      // Firebot's `off(eventName, id)` removes ONE handler, identified by the id
+      // `onAsync` returned — so this mock unregisters only on an id match. A
+      // caller that forgets the id, or passes the wrong one, leaves the handler
+      // registered and fails the teardown test rather than passing silently.
+      off: (event: string, id: string) => {
+        offCalls.push({ event, id });
+        if (handlers.get(event)?.id === id) {
+          handlers.delete(event);
+        }
+      },
       send: (event: string, data: unknown) => sent.push({ event, data }),
     },
   };
-  return { registered, handlers, sent, modules };
+  return { registered, handlers, offCalls, sent, modules };
 }
 
 const runRequest = (modules: unknown) => ({
@@ -88,14 +99,21 @@ describe("script lifecycle", () => {
   });
 
   it("registers the copy-debug-log handler in run() and removes it in stop()", () => {
-    const { handlers, modules } = makeHarness();
+    const { handlers, offCalls, modules } = makeHarness();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     script.run(runRequest(modules) as any);
-    expect(handlers.has("music-to-my-ears:copy-debug-log")).toBe(true);
+    const registration = handlers.get("music-to-my-ears:copy-debug-log");
+    expect(registration).toBeDefined();
 
     script.stop?.();
+
     expect(handlers.has("music-to-my-ears:copy-debug-log")).toBe(false);
+    // `off` takes the id `onAsync` returned, not just the event name — assert
+    // the id actually makes the round trip rather than trusting the call count.
+    expect(offCalls).toEqual([
+      { event: "music-to-my-ears:copy-debug-log", id: registration!.id },
+    ]);
   });
 
   it("clears the debug log in stop()", () => {
@@ -115,7 +133,7 @@ describe("script lifecycle", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     script.run(runRequest(modules) as any);
     record("warn", "something went sideways");
-    await handlers.get("music-to-my-ears:copy-debug-log")?.();
+    await handlers.get("music-to-my-ears:copy-debug-log")?.handler();
 
     expect(sent).toHaveLength(1);
     expect(sent[0].event).toBe("copy-to-clipboard");
