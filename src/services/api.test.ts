@@ -660,7 +660,10 @@ describe("searchTrack", () => {
     it("rejects a candidate whose only shared token is a function word", async () => {
       // The reported bug: `The Decision` answered a request for a dinosaur song
       // on the strength of the word `the`.
-      const decoy = makeTrack({ name: "The Decision", artists: [{ id: "artist-x", name: "Someone" }] });
+      const decoy = makeTrack({
+        name: "The Decision",
+        artists: [{ id: "artist-x", name: "Someone" }],
+      });
       mockFetch.mockResolvedValueOnce(okResponse(searchBody([decoy])));
 
       await expect(searchTrack("walk the dinosaur")).resolves.toBeUndefined();
@@ -677,7 +680,10 @@ describe("searchTrack", () => {
 
     it("keeps the any-token floor when the query is all function words", async () => {
       // `The The` is a band; requiring a content token would make it unfindable.
-      const band = makeTrack({ name: "This Is The Day", artists: [{ id: "artist-thethe", name: "The The" }] });
+      const band = makeTrack({
+        name: "This Is The Day",
+        artists: [{ id: "artist-thethe", name: "The The" }],
+      });
       mockFetch.mockResolvedValueOnce(okResponse(searchBody([band])));
 
       const track = await searchTrack("the the");
@@ -686,7 +692,10 @@ describe("searchTrack", () => {
     });
 
     it("treats a pronoun as a content token", async () => {
-      const track = makeTrack({ name: "Me Myself", artists: [{ id: "artist-x", name: "Someone" }] });
+      const track = makeTrack({
+        name: "Me Myself",
+        artists: [{ id: "artist-x", name: "Someone" }],
+      });
       mockFetch.mockResolvedValueOnce(okResponse(searchBody([track])));
 
       await expect(searchTrack("hold me")).resolves.toMatchObject({ name: "Me Myself" });
